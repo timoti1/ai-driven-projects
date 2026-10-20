@@ -1,0 +1,53 @@
+# Two models that stay loaded together via a swap group.
+# Matrix router alternative: docs/04-groups-and-routing.md.
+# Model files: tinyllama-1.1b-chat-v1.0 Q4_K_M and Q2_K (no login on HF).
+
+logLevel: info
+
+macros:
+  llama-server: __LLAMA_SERVER__
+
+routing:
+  router:
+    use: group
+    settings:
+      groups:
+        # swap=false  -> members coexist instead of replacing each other
+        # exclusive=true -> loading another model evicts the whole group
+        pair:
+          swap: false
+          exclusive: true
+          members:
+          - tiny-q4k
+          - tiny-q2k
+
+models:
+  tiny-q4k:
+    name: tiny-q4k
+    description: TinyLlama 1.1B chat Q4_K_M, CPU
+    capabilities:
+      context: 2048
+    cmd: >-
+      ${llama-server}
+      --model __MODELS_DIR__/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+      --ctx-size 2048
+      --jinja
+      --host 127.0.0.1
+      --port ${PORT}
+    ttl: 600
+
+  tiny-q2k:
+    name: tiny-q2k
+    description: TinyLlama 1.1B chat Q2_K, CPU (smaller, dumber, faster)
+    capabilities:
+      context: 2048
+    cmd: >-
+      ${llama-server}
+      --model __MODELS_DIR__/tinyllama-1.1b-chat-v1.0.Q2_K.gguf
+      --ctx-size 2048
+      --jinja
+      --host 127.0.0.1
+      --port ${PORT}
+    ttl: 600
+
+globalTTL: 1800

@@ -1,0 +1,9 @@
+# Personal deployments: keep your own config and secrets out of git.
+config.local*.yml
+.llama-swap.env
+*.bak
+*.bak-*
+tmp/
+.cache/
+*.log
+__pycache__/
