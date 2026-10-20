@@ -1,0 +1,16 @@
+[Unit]
+Description=Llama API Server
+After=network.target
+
+[Service]
+Type=simple
+User=timoti
+WorkingDirectory=/home/timoti/llama-swap
+EnvironmentFile=/home/timoti/llama-swap/.llama-swap.env
+ExecStart=/home/timoti/llama-swap/llama-swap --config config.yml --listen 0.0.0.0:8080
+ExecReload=/bin/true
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

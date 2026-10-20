@@ -1,0 +1,27 @@
+# llama-swap starter config: one small model, runs on any machine (CPU).
+# install.sh replaces the __LLAMA_SERVER__ and __MODELS_DIR__ placeholders.
+# Model file: tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf (no login needed on HF).
+
+logLevel: info
+
+# Keep the engine binary path in one place; referenced as ${llama-server}.
+macros:
+  llama-server: __LLAMA_SERVER__
+
+models:
+  tinyllama-1.1b-chat:
+    name: tinyllama-1.1b-chat
+    description: TinyLlama 1.1B chat, fine for smoke tests (CPU only)
+    capabilities:
+      context: 2048
+    cmd: >-
+      ${llama-server}
+      --model __MODELS_DIR__/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf
+      --ctx-size 2048
+      --jinja
+      --host 127.0.0.1
+      --port ${PORT}
+    ttl: 600
+
+# Unload any model idle for 30 minutes.
+globalTTL: 1800

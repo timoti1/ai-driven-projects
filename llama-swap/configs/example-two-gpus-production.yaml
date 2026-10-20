@@ -1,0 +1,458 @@
+# Real-world reference: two AMD RX 9070 GPUs, matrix router (one model per GPU
+# can stay loaded together), llama.cpp Vulkan/ROCm + a custom engine.
+# Paths, GPU indices and env below are specific to the reference host;
+# adapt them to your machine. See docs/04-groups-and-routing.md.
+
+logLevel: debug
+logToStdout: both
+healthCheckTimeout: 500
+metricsMaxInMemory: 1000
+captureBuffer: 15
+sendLoadingState: true
+includeAliasesInList: false
+globalTTL: 1800
+unloadTimeout: 300
+
+performance:
+  disabled: false
+  every: 15s
+
+upstream:
+  ignorePaths:
+  - '.*\.(js|json|css|png|gif|jpg|jpeg|ico|txt|svg|woff|woff2|map|webp)$'
+  - '^/metrics$'
+  - '^/health$'
+  - '^/mcp$'
+  - '^/props$'
+  - '^/slots$'
+  - '^/status$'
+  - '^/v1/status$'
+  - '^/v1/models$'
+  - '^/config$'
+  - '^/settings$'
+  - '^/api/requests$'
+  - '^/api-monitor$'
+  - '^/load$'
+  - '^/unload$'
+  - '^/v1/unload$'
+  - '^/v1/vram$'
+  - '^/switcher$'
+
+ui:
+  activity:
+    session_id:
+    - X-Session-ID
+    - X-Litellm-Session-Id
+
+routing:
+  router:
+    use: matrix
+    settings:
+      matrix:
+        # vars: short names -> model ids
+        # GPU Gigabyte (Vulkan1/ROCm0/HIP1), GPU Sapphire (Vulkan0/HIP0)
+        vars:
+          # Gigabyte
+          tiel: tiel-coder-35b-a3b
+          xxl: qwen3.8-27b-IQ3XXS
+          xxsrocm: qwen3.8-27b-IQ3XXS-Uncensored
+          iq3xxs: qwen3.8-27b-IQ3XXS-Uncensored
+          iq3srocm: qwen3.8-27b-IQ3S-ROCm
+          flashS: qwen3.8-flash-IQ3_S
+          flashX: qwen3.8-flash-IQ3_XXS
+          # Sapphire
+          sapphire: qwen3.8-27b-IQ3XXS-Uncensored-Sapphire
+          c2xxs: qwen3.8-27b-IQ3XXS-Uncensored-C2
+          # Sapphire twins (same packs as the Gigabyte models)
+          xxls: qwen3.8-27b-IQ3XXS-Sapphire
+          iq3srocms: qwen3.8-27b-IQ3S-ROCm-Sapphire
+        # slow to reload (huge weights) -> keep loaded when possible
+        evict_costs:
+          flashS: 10
+          flashX: 10
+        # allowed combinations: one Gigabyte model + one Sapphire model;
+        # any single model is a subset and allowed too
+        sets:
+          pair: "(xxl|xxsrocm|iq3xxs|iq3srocm|flashS|flashX) & (sapphire|c2xxs|xxls|iq3srocms)"
+
+macros:
+  latest-llama: /home/timoti/Downloads/llama-latest/build/bin/llama-server
+  rocm-llama: /home/timoti/Downloads/llama-rocm-gfx120X/llama-server
+  ik-cpu-llama: /home/timoti/Downloads/ik-llama.cpp/build-cpu/bin/llama-server
+
+models:
+  # ---------- Gigabyte RX 9070 (Vulkan1 / HIP1, PCIe x16) ----------
+
+  tiel-coder-35b-a3b:
+    name: tiel-coder-35b-a3b
+    description: 'GPU: Gigabyte RX 9070 (Vulkan1 / HIP1, PCIe x16)'
+    capabilities:
+      context: 110000
+      tools: false
+    cmd: >-
+      ${latest-llama}
+      --model /media/timoti/Data/lmstudio/models/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS.gguf
+      --spec-type draft-mtp
+      --spec-draft-backend-sampling
+      --spec-draft-n-max 2
+      --device Vulkan1
+      -ngl 99
+      -lv 4
+      -rea auto
+      --flash-attn on
+      --n-cpu-moe 12
+      --parallel 1
+      --batch-size 2048
+      --ubatch-size 1024
+      --threads 8
+      --ctx-size 155000
+      -ctk q4_0
+      -ctv q4_0
+      --temp 0.6
+      --top_k 20
+      --top-p 0.95
+      --min-p 0.0
+      --presence_penalty 1.2
+      --repeat-penalty 1.1
+      --reasoning-effort low
+      --reasoning-budget 2048
+      --jinja
+      --no-mmproj
+      --cache-ram 4096
+      --host 0.0.0.0
+      --port ${PORT}
+      --metrics
+    env:
+    - CUDA_VISIBLE_DEVICES=
+    - VK_DRIVER_FILES=/home/timoti/mesa-build/radeon_icd.json
+    ttl: 900
+
+  qwen3.8-27b-IQ3XXS:
+    name: qwen3.8-27b-IQ3XXS
+    description: 'GPU: Gigabyte RX 9070 (Vulkan1 / HIP1, PCIe x16)'
+    capabilities:
+      context: 200000
+      tools: false
+    cmd: >-
+      ${latest-llama}
+      --model /media/timoti/Data/lmstudio/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf
+      --device Vulkan1
+      -ngl 99
+      -lv 3
+      -rea auto
+      --reasoning-preserve
+      --flash-attn on
+      --parallel 1
+      --spec-type draft-mtp
+      --spec-draft-n-max 2
+      --batch-size 2048
+      --ubatch-size 1024
+      --threads 8
+      --ctx-size 209000
+      -ctk q8_0
+      -ctv q4_0
+      --temp 0.6
+      --top_k 30
+      --top-p 0.95
+      --presence_penalty 1.2
+      --repeat-penalty 1.1
+      --reasoning-effort low
+      --reasoning-budget 4092
+      --jinja
+      --no-mmproj
+      --cache-ram 0
+      --host 0.0.0.0
+      --port ${PORT}
+      --metrics
+    env:
+    - CUDA_VISIBLE_DEVICES=
+    - VK_DRIVER_FILES=/home/timoti/mesa-build/radeon_icd.json
+    ttl: 900
+
+  qwen3.8-27b-IQ3XXS-Uncensored:
+    name: qwen3.8-27b-IQ3XXS-Uncensored
+    description: 'GPU: Gigabyte RX 9070 (Vulkan1 / HIP1, PCIe x16)'
+    capabilities:
+      context: 130000
+      tools: false
+    cmd: >-
+      ${latest-llama}
+      --model /media/timoti/Data/lmstudio/models/RentedNoodle/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored-MTP.gguf
+      --device Vulkan1
+      -ngl 99
+      -lv 3
+      -rea auto
+      --no-reasoning-preserve
+      --flash-attn on
+      --parallel 1
+      --spec-type draft-mtp
+      --spec-draft-n-max 2
+      --spec-draft-backend-sampling
+      --batch-size 1024
+      --ubatch-size 1024
+      --threads 8
+      --ctx-size 261000
+      -ctk q8_0
+      -ctv q4_0
+      --temp 0.6
+      --top_k 20
+      --top-p 0.95
+      --min-p 0.0
+      --reasoning-effort low
+      --reasoning-budget 4096
+      --jinja
+      --mmproj /media/timoti/Data/lmstudio/models/RentedNoodle/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored/mmproj-Qwen3.8-27B-Q5_K-MIX.gguf
+      --cache-ram 0
+      --host 0.0.0.0
+      --port ${PORT}
+      --metrics
+    env:
+    - CUDA_VISIBLE_DEVICES=
+    - VK_DRIVER_FILES=/home/timoti/mesa-build/radeon_icd.json
+    ttl: 900
+
+  qwen3.8-27b-IQ3S-ROCm:
+    name: qwen3.8-27b-IQ3S-ROCm
+    description: 'GPU: Gigabyte RX 9070 (HIP1, PCIe x16), ROCm backend'
+    capabilities:
+      context: 105000
+      tools: false
+    cmd: >-
+      ${rocm-llama}
+      --model /media/timoti/Data/lmstudio/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf
+      --device ROCm0
+      -ngl 99
+      -lv 4
+      -rea auto
+      --flash-attn on
+      --parallel 1
+      --spec-type draft-mtp
+      --spec-draft-n-max 3
+      --batch-size 768
+      --ubatch-size 192
+      --threads 8
+      --ctx-size 105000
+      -ctk q4_0
+      -ctv q4_0
+      --temp 0.6
+      --top_k 30
+      --top-p 0.95
+      --presence_penalty 1.2
+      --repeat-penalty 1.1
+      --reasoning-effort low
+      --reasoning-budget 4092
+      --jinja
+      --no-mmproj
+      --cache-ram 0
+      --host 0.0.0.0
+      --port ${PORT}
+      --metrics
+    env:
+    - CUDA_VISIBLE_DEVICES=
+    - LD_LIBRARY_PATH=/home/timoti/Downloads/llama-b1347-rocm-gfx120X
+    - HIP_VISIBLE_DEVICES=1
+    ttl: 900
+
+  # Strata HIP engine (RX 9070, Qwen3.8-Flash-Next, ctx 256k, int8 KV + WMMA);
+  # the engine binds ${PORT} only after the weights load (~3 min cold start).
+  # Engine web UI on that port: "/" app, "/api-monitor" dashboard
+  # (engine JSON: "api_monitor": true to keep request history,
+  # "host": "0.0.0.0" to open it to the LAN; port from llama-swap /running).
+  qwen3.8-flash-IQ3_S:
+    name: qwen3.8-flash-IQ3_S
+    description: 'GPU: Gigabyte RX 9070 (HIP1, PCIe x16) - Strata engine'
+    capabilities:
+      context: 256000
+      tools: false
+    cmd: >-
+      /media/timoti/Data/repos/Strata/.venv/bin/python /media/timoti/Data/repos/Strata/serve/server.py
+      --engine strata
+      --config /media/timoti/Data/repos/Strata/strata-iq3_s.json
+      --port ${PORT}
+    env:
+    - STRATA_REQUEST_LINES=1
+    - HIP_VISIBLE_DEVICES=1
+    ttl: 86400
+
+  qwen3.8-flash-IQ3_XXS:
+    name: qwen3.8-flash-IQ3_XXS
+    description: 'GPU: Gigabyte RX 9070 (HIP1, PCIe x16) - Strata engine'
+    capabilities:
+      context: 256000
+      tools: false
+    cmd: >-
+      /media/timoti/Data/repos/Strata/.venv/bin/python /media/timoti/Data/repos/Strata/serve/server.py
+      --engine strata
+      --config /media/timoti/Data/repos/Strata/strata-iq3xxs-abl.json
+      --port ${PORT}
+    env:
+    - STRATA_REQUEST_LINES=1
+    - HIP_VISIBLE_DEVICES=1
+    ttl: 86400
+
+  # ---------- Sapphire RX 9070 (Vulkan0 / HIP0, slow PCIe x2 slot) ----------
+
+  qwen3.8-27b-IQ3XXS-Uncensored-Sapphire:
+    name: qwen3.8-27b-IQ3XXS-Uncensored-Sapphire
+    description: 'GPU: Sapphire RX 9070 (Vulkan0 / HIP0, slow PCIe x2 slot)'
+    capabilities:
+      context: 150000
+      tools: false
+    cmd: >-
+      ${latest-llama}
+      --model /media/timoti/Data/lmstudio/models/RentedNoodle/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored-MTP.gguf
+      --device Vulkan0
+      -ngl 99
+      -lv 3
+      -rea auto
+      --no-reasoning-preserve
+      --flash-attn on
+      --parallel 1
+      --spec-type draft-mtp
+      --spec-draft-n-max 2
+      --batch-size 2048
+      --ubatch-size 1024
+      --threads 8
+      --ctx-size 170000
+      -ctk q4_0
+      -ctv q4_0
+      --temp 0.6
+      --top_k 20
+      --top-p 0.95
+      --min-p 0.0
+      --reasoning-effort low
+      --reasoning-budget 4096
+      --jinja
+      --mmproj /media/timoti/Data/lmstudio/models/RentedNoodle/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored/mmproj-Qwen3.8-27B-Q5_K-MIX.gguf
+      --cache-ram 0
+      --host 0.0.0.0
+      --port ${PORT}
+      --metrics
+    env:
+    - CUDA_VISIBLE_DEVICES=
+    - VK_DRIVER_FILES=/home/timoti/mesa-build/radeon_icd.json
+    - RADV_PERFTEST=coop_matrix
+    ttl: 3600
+
+  qwen3.8-27b-IQ3XXS-Uncensored-C2:
+    name: qwen3.8-27b-IQ3XXS-Uncensored-C2
+    description: 'GPU: Sapphire RX 9070 (Vulkan0, PCIe x2) - 2nd chat instance'
+    capabilities:
+      context: 130000
+      tools: false
+    cmd: >-
+      ${latest-llama}
+      --model /media/timoti/Data/lmstudio/models/RentedNoodle/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored-v1.1.gguf
+      --device Vulkan0
+      -ngl 99
+      -lv 3
+      -rea auto
+      --no-reasoning-preserve
+      --flash-attn on
+      --parallel 2
+      --batch-size 1024
+      --ubatch-size 1024
+      --threads 8
+      --ctx-size 300000
+      -ctk q4_0
+      -ctv q4_0
+      --temp 1.0
+      --top_k 20
+      --top-p 0.95
+      --min-p 0.0
+      --reasoning-effort low
+      --reasoning-budget 4096
+      --jinja
+      --cache-ram 0
+      --host 0.0.0.0
+      --port ${PORT}
+      --metrics
+    env:
+    - CUDA_VISIBLE_DEVICES=
+    - VK_DRIVER_FILES=/home/timoti/mesa-build/radeon_icd.json
+    ttl: 900
+
+  qwen3.8-27b-IQ3XXS-Sapphire:
+    name: qwen3.8-27b-IQ3XXS-Sapphire
+    description: 'GPU: Sapphire RX 9070 (Vulkan0 / HIP0, PCIe x2) - twin of qwen3.8-27b-IQ3XXS'
+    capabilities:
+      context: 150000
+      tools: false
+    cmd: >-
+      ${latest-llama}
+      --model /media/timoti/Data/lmstudio/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf
+      --device Vulkan0
+      -ngl 99
+      -lv 3
+      -rea auto
+      --reasoning-preserve
+      --flash-attn on
+      --parallel 1
+      --spec-type draft-mtp
+      --spec-draft-n-max 2
+      --batch-size 2048
+      --ubatch-size 1024
+      --threads 8
+      --ctx-size 170000
+      -ctk q4_0
+      -ctv q4_0
+      --temp 0.6
+      --top_k 30
+      --top-p 0.95
+      --presence_penalty 1.2
+      --repeat-penalty 1.1
+      --reasoning-effort low
+      --reasoning-budget 4092
+      --jinja
+      --no-mmproj
+      --mmproj /media/timoti/Data/lmstudio/models/RentedNoodle/Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored/mmproj-Qwen3.8-27B-Q5_K-MIX.gguf
+      --cache-ram 0
+      --host 0.0.0.0
+      --port ${PORT}
+      --metrics
+    env:
+    - CUDA_VISIBLE_DEVICES=
+    - VK_DRIVER_FILES=/home/timoti/mesa-build/radeon_icd.json
+    ttl: 900
+
+  qwen3.8-27b-IQ3S-ROCm-Sapphire:
+    name: qwen3.8-27b-IQ3S-ROCm-Sapphire
+    description: 'GPU: Sapphire RX 9070 (HIP0, PCIe x2), ROCm - tuned b1024 ub256 q4_0 110k mtp2'
+    capabilities:
+      context: 105000
+      tools: false
+    cmd: >-
+      ${rocm-llama}
+      --model /media/timoti/Data/lmstudio/models/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf
+      --device ROCm0
+      -ngl 99
+      -lv 4
+      -rea auto
+      --flash-attn on
+      --parallel 1
+      --spec-type draft-mtp
+      --spec-draft-n-max 2
+      --batch-size 1024
+      --ubatch-size 256
+      --threads 8
+      --ctx-size 105000
+      -ctk q4_0
+      -ctv q4_0
+      --temp 0.6
+      --top_k 30
+      --top-p 0.95
+      --presence_penalty 1.2
+      --repeat-penalty 1.1
+      --reasoning-effort low
+      --reasoning-budget 4092
+      --jinja
+      --no-mmproj
+      --cache-ram 0
+      --host 0.0.0.0
+      --port ${PORT}
+      --metrics
+    env:
+    - CUDA_VISIBLE_DEVICES=
+    - LD_LIBRARY_PATH=/home/timoti/Downloads/llama-b1347-rocm-gfx120X
+    - HIP_VISIBLE_DEVICES=0
+    ttl: 900

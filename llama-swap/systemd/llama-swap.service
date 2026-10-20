@@ -1,0 +1,18 @@
+# Unit template; install.sh substitutes __USER__, __INSTALL_DIR__,
+# __CONFIG_PATH__ and __LISTEN__ before writing it to /etc/systemd/system.
+[Unit]
+Description=llama-swap - OpenAI-compatible proxy with model swapping
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__INSTALL_DIR__
+EnvironmentFile=-__INSTALL_DIR__/.llama-swap.env
+ExecStart=__INSTALL_DIR__/llama-swap --config __CONFIG_PATH__ --listen __LISTEN__
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
