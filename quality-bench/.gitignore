@@ -1,0 +1,20 @@
+# virtualenv
+.benchenv/
+
+# per-run staging (transient; kept only for interrupted runs)
+.stage/
+
+# archived runs (clean.py archive mode; restore by moving back)
+.prev_runs/
+
+# Python
+__pycache__/
+*.pyc
+
+# raw pi event logs (large debug stream; keep answers.json / solutions.py /
+# terminal outputs / time files, which are the actual results)
+runs/*/pi_stream_*.jsonl
+
+# runtime-generated git fixtures (created by prepare scripts at run time)
+terminal_sandboxes/*/repo/
+terminal_sandboxes_hard/*/repo/
