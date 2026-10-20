@@ -1,0 +1,16 @@
+# Node / pi
+node_modules/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Local capture scratch
+frames/
+*.log
+
+# Large demo video
+docs/herdr-with-pi-sessions-and-llama-metrics-ext.mp4
