@@ -4,53 +4,96 @@
 # results dir; every pi session starts with a clean context, so no compaction mid-run.
 set -euo pipefail
 
-MODEL="${1:?Usage: ./run.sh MODEL [RUN_ID] [NOTE] [SEED]}"   # bare model id or provider/id form; both hit LM Studio below
+MODEL="${1:?Usage: ./run.sh MODEL [RUN_ID] [NOTE] [SEED]}"   # bare model id or provider/id form; endpoint from env vars below (default: LM Studio)
+# OpenRouter example: BENCH_HOST=openrouter.ai BENCH_PORT=443 BENCH_SCHEME=https BENCH_PATH_PREFIX=/api BENCH_API_KEY_ENV=OPENROUTER_API_KEY BENCH_API=openai-completions ./run.sh nvidia/nemotron-3.5-super-vl:free
 RUN_ID="${2:-$(date +%Y%m%d-%H%M%S)}"                 # timestamp by default so parallel campaigns never collide
 NOTE="${3:-}"                                          # free text -> meta_<RUN_NAME>.json (Note column of compare/report)
-SEED="${4:-${BENCH_SEED:-}}"                         # generation seed -> samplingParams.seed (needs a server that honors seed)
+SEED="${4-${BENCH_SEED:-1234}}"                       # generation seed -> samplingParams.seed (needs a server that honors seed); default 1234, pass "" to disable
 if [[ -n "$SEED" && ! "$SEED" =~ ^[0-9]+$ ]]; then echo "!! seed must be an integer, got: $SEED" >&2; exit 1; fi
 
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="bench-sandbox"
-SAFE_MODEL="${MODEL//\//-}"                            # dir/file-safe form of MODEL
+SAFE_MODEL="${MODEL//\//-}"; SAFE_MODEL="${SAFE_MODEL//:/-}"  # dir/file-safe form (slashes and colons -> dashes)
 RUN_NAME="${SAFE_MODEL}_${RUN_ID}"                     # one run = runs/<RUN_NAME>/ + .stage/<RUN_NAME>/
 STAGE="$BENCH_DIR/.stage/$RUN_NAME"                    # per-launch stage (question/task copies); deleted on full success
 RUNDIR="$BENCH_DIR/runs/$RUN_NAME"                     # persistent results; mounted as /work in every launch
 
-# LM Studio endpoint. Override to match your setup via env vars:
-LMSTUDIO_HOST="${BENCH_LMSTUDIO_HOST:-192.168.1.104}"         # llama.cpp server (reachable from host and from containers)
-LMSTUDIO_PORT="${BENCH_LMSTUDIO_PORT:-8080}"                  # preflight checks it before burning an hour on a dead endpoint
-CTX="${BENCH_CTX:-}"                                          # contextWindow for models.json; empty = auto from llama-swap context_length (set BENCH_CTX to override)
-KEY="${BENCH_LMSTUDIO_KEY:-lmstudio}"                           # placeholder key; LM Studio ignores Authorization unless auth is enabled
+# Inference endpoint. Override via env vars (LMSTUDIO_* kept as aliases):
+BENCH_HOST="${BENCH_HOST:-${BENCH_LMSTUDIO_HOST:-192.168.1.104}}"      # inference server host
+BENCH_PORT="${BENCH_PORT:-${BENCH_LMSTUDIO_PORT:-8080}}"              # inference server port
+BENCH_SCHEME="${BENCH_SCHEME:-http}"                                # http or https
+BENCH_PATH_PREFIX="${BENCH_PATH_PREFIX:-}"                          # URL prefix before /v1/... (e.g. /api for OpenRouter)
+CTX="${BENCH_CTX:-}"                                                # contextWindow for models.json; empty = auto from server context_length
+BENCH_API_KEY_ENV="${BENCH_API_KEY_ENV:-}"                          # env var name holding the API key (e.g. OPENROUTER_API_KEY)
+BENCH_API_KEY="${BENCH_API_KEY:-${BENCH_LMSTUDIO_KEY:-lmstudio}}"     # API key literal fallback (prefer BENCH_API_KEY_ENV)
+BENCH_API="${BENCH_API:-openai-completions}"                        # pi agent 'api' value: openai-completions | openai-chat
 
-# "provider/id" -> --provider P --model id ; bare name -> default provider key.
-PROV="lmstudio"; MID="$MODEL"
-case "$MODEL" in */*) PROV="${MODEL%%/*}"; MID="${MODEL#*/}" ;; esac
+# resolve API key: env var named by BENCH_API_KEY_ENV > BENCH_API_KEY literal
+KEY="$BENCH_API_KEY"
+if [[ -n "$BENCH_API_KEY_ENV" ]]; then
+    env_val="${!BENCH_API_KEY_ENV}"
+    if [[ -n "$env_val" ]]; then KEY="$env_val"; fi
+fi
+
+# Provider id used in pi's models.json. Auto-detected from host when BENCH_PROVIDER
+# is not set: openrouter.ai -> "openrouter" (pi finds OPENROUTER_API_KEY in auth.json),
+# anything else -> "openai" (OpenAI-compatible endpoint via models.json baseUrl + apiKey).
+# Override with BENCH_PROVIDER if you need a different provider label.
+if [[ -z "${BENCH_PROVIDER:-}" && "$BENCH_HOST" == *"openrouter"* ]]; then
+    PROV="openrouter"
+else
+    PROV="${BENCH_PROVIDER:-openai}"
+fi
+MID="$MODEL"
+# Full model id stays as given (e.g. "nvidia/nemotron-3.5-lightning:free" for OpenRouter).
+# Bare name keeps PROV as auto-detected; no provider splitting is done automatically.
 
 ORDER=(mmlu gsm8k arc hellaswag math winogrande bbh humaneval terminal terminal_hard)  # INSTRUCTIONS.md order, one container per entry
 
 # --- preflight --------------------------------------------------------------------------
-MODELS_JSON=$(curl -fsS --max-time 5 "http://$LMSTUDIO_HOST:$LMSTUDIO_PORT/v1/models") || {
-    echo "!! cannot reach inference server at $LMSTUDIO_HOST:$LMSTUDIO_PORT (set BENCH_LMSTUDIO_HOST/PORT if different)" >&2
+BASE_URL="${BENCH_SCHEME}://${BENCH_HOST}:${BENCH_PORT}${BENCH_PATH_PREFIX}/v1"
+MODELS_URL="${BASE_URL}/models"
+MODELS_JSON=$(curl -fsS --max-time 5 -H "Authorization: Bearer $KEY" "$MODELS_URL") || {
+    echo "!! cannot reach inference server at $MODELS_URL (set BENCH_HOST/PORT/SCHEME/PATH_PREFIX if different)" >&2
     exit 1
 }
 # exact model id must exist on the server, or every container dies with a 404
-if ! python3 -c 'import json,sys; sys.exit(0 if any(m.get("id")==sys.argv[1] for m in json.loads(sys.argv[2])["data"]) else 1)' "$MID" "$MODELS_JSON"; then
-    echo "!! model '$MID' not found on $LMSTUDIO_HOST:$LMSTUDIO_PORT. Available:" >&2
-    python3 -c 'import json,sys; [print("   ", m["id"]) for m in sorted(json.loads(sys.argv[1])["data"], key=lambda m: m["id"])]' "$MODELS_JSON" >&2
+# (feed JSON via stdin to avoid argument-list-too-long on huge model catalogs like OpenRouter)
+if ! printf '%s' "$MODELS_JSON" | python3 -c 'import json,sys; data=json.load(sys.stdin); sys.exit(0 if any(m.get("id")==sys.argv[1] for m in data["data"]) else 1)' "$MID"; then
+    echo "!! model '$MID' not found on $BENCH_HOST:$BENCH_PORT. Available:" >&2
+    printf '%s' "$MODELS_JSON" | python3 -c 'import json,sys; data=json.load(sys.stdin); [print("   ", m["id"]) for m in sorted(data["data"], key=lambda m: m["id"])]' >&2
     exit 1
 fi
 # auto-derive the real engine context window (llama-swap reports context_length per model;
 # a too-large CTX causes overflow-compactions mid-session which corrupt batch bookkeeping)
 if [[ -z "$CTX" ]]; then
-    CTX="$(python3 -c 'import json,sys
-ms=[m for m in json.loads(sys.argv[2])["data"] if m.get("id")==sys.argv[1]]
-print(ms[0].get("context_length") or ms[0].get("context_window") or "")' "$MID" "$MODELS_JSON")"
+    CTX="$(printf '%s' "$MODELS_JSON" | python3 -c 'import json,sys
+ms=[m for m in json.load(sys.stdin)["data"] if m.get("id")==sys.argv[1]]
+print(ms[0].get("context_length") or ms[0].get("context_window") or "")' "$MID")"
     if [[ -z "$CTX" ]]; then
-        echo "!! server does not report context_length for '$MID'; set BENCH_CTX=<engine ctx-size> explicitly" >&2
-        exit 1
+        echo "!! server does not report context_length for '$MID'; set BENCH_CTX=<ctx size> explicitly (or pass BENCH_CTX=8192 etc)" >&2
+        CTX=""
+    else
+        echo "=== context window: CTX=$CTX auto-detected from server for $MID (override with BENCH_CTX) ===" >&2
     fi
-    echo "=== context window: CTX=$CTX auto-detected from server for $MID (override with BENCH_CTX) ===" >&2
+fi
+
+# resolve the GGUF file this model id actually loads: server config.yml is the only
+# place with paths (/v1/models hides them; engine-wrapper models resolve via their engine JSON).
+MODEL_FILE=""
+# GGUF lookup only applies to local llama-swap endpoints; skip for remote (OpenRouter etc.)
+if [[ "${BENCH_SKIP_FILE_LOOKUP:-0}" != "1" ]] && command -v sshpass >/dev/null \
+    && [[ "$BENCH_SCHEME" == "http" && -z "$BENCH_PATH_PREFIX" ]]; then
+    SSH_TARGET="${BENCH_SSH_TARGET:-timoti@$BENCH_HOST}"
+    SSH_PASS="${BENCH_SSH_PASS:-enter1}"
+    CFG_RMT="${BENCH_SWAP_CONFIG:-\$HOME/llama-swap/config.yml}"
+    MODEL_FILE="$(sshpass -p "$SSH_PASS" ssh -T -o StrictHostKeyChecking=no -o ConnectTimeout=8 \
+        "$SSH_TARGET" "python3 - '$MID' \"$CFG_RMT\"" < "$BENCH_DIR/bin/_model_file.py" 2>/dev/null | tr -d '\r' | tail -n1 || true)"
+fi
+if [[ -n "$MODEL_FILE" ]]; then
+    echo "=== model file: $MODEL_FILE (auto-resolved from llama-swap config) ===" >&2
+else
+    echo "!! model file not auto-resolved (no sshpass / unreachable ssh; set BENCH_SSH_TARGET/BENCH_SSH_PASS or BENCH_SKIP_FILE_LOOKUP=1); reports fall back to model_files.json" >&2
 fi
 
 # --- per-run scaffolding ------------------------------------------------------------------
@@ -58,18 +101,42 @@ mkdir -p "$RUNDIR"
 PIHOME="$STAGE/pi"; mkdir -p "$PIHOME/agent"
 # pin generation RNG when a seed was given (pi passes samplingParams through to the OpenAI-compat request)
 SAMPLING=""
+CTX_JSON=""
+if [[ -n "$CTX" ]]; then
+    CTX_JSON=", \"contextWindow\": $CTX"
+fi
 if [[ -n "$SEED" ]]; then
     SAMPLING=", \"samplingParams\": { \"seed\": $SEED }"
     echo "=== generation seed: $SEED (reproducible sampling; engine must honor 'seed')" >&2
 fi
 cat > "$PIHOME/agent/models.json" <<EOF
 { "providers": { "$PROV": {
-    "baseUrl": "http://$LMSTUDIO_HOST:$LMSTUDIO_PORT/v1",
-    "api": "openai-completions",
+    "baseUrl": "$BASE_URL",
+    "api": "$BENCH_API",
     "apiKey": "$KEY",
-    "models": [ { "id": "$MID", "contextWindow": $CTX$SAMPLING } ]
+    "models": [ { "id": "$MID"$CTX_JSON$SAMPLING } ]
 } } }
 EOF
+# write auth.json so pi finds the provider key inside the container
+if [[ -n "${BENCH_API_KEY_ENV:-}" ]]; then
+    auth_val="${!BENCH_API_KEY_ENV}"
+    if [[ -n "$auth_val" ]]; then
+        python3 - "$PIHOME/agent/auth.json" "$PROV" "$auth_val" <<'PYEOF'
+import json, os, sys
+path, prov, key = sys.argv[1], sys.argv[2], sys.argv[3]
+d = {}
+if os.path.exists(path):
+    try:
+        d = json.load(open(path))
+    except Exception:
+        d = {}
+d[prov] = {"type": "api_key", "key": key}
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as f:
+    json.dump(d, f, indent=2)
+PYEOF
+    fi
+fi
 
 # run metadata: notes (if given) + the context window this run actually used
 mkdir -p "$BENCH_DIR/meta"
@@ -79,6 +146,7 @@ else
     python3 "$BENCH_DIR/bin/_meta.py" "$BENCH_DIR/meta/meta_$RUN_NAME.json" "context_size=$CTX"
 fi
 if [[ -n "$SEED" ]]; then python3 "$BENCH_DIR/bin/_meta.py" "$BENCH_DIR/meta/meta_$RUN_NAME.json" "seed=$SEED"; fi
+if [[ -n "$MODEL_FILE" ]]; then python3 "$BENCH_DIR/bin/_meta.py" "$BENCH_DIR/meta/meta_$RUN_NAME.json" "model_file=$MODEL_FILE"; fi
 
 # --- helpers ------------------------------------------------------------------------------
 qcount() { python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "$BENCH_DIR/questions/questions_$1.json"; }
@@ -120,7 +188,7 @@ run_bench() {
         |
         # raw event log per bench, kept for debugging and compaction audits
         tee -a "$RUNDIR/pi_stream_$b.jsonl" \
-        | python3 "$BENCH_DIR/bin/_progress.py" --name "$cname" || return 1
+        | python3 "$BENCH_DIR/bin/_progress.py" --name "$cname" --run-name "$RUN_NAME" --bench "$b" || return 1
 }
 
 # terminal benches only: copy out.txt from each task sandbox into runs/<RUN_NAME>/<bench>/ (score.py reads these).

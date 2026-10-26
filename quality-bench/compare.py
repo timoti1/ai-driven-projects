@@ -1,6 +1,7 @@
 """Aggregate all bench/results/results_*.json into one comparison table.
 
-Fixed total width = 226 chars. Long model names, run ids, and notes are truncated with an ellipsis.
+Fixed total width = 226 chars. The file column shows the GGUF filename recorded in the run meta
+(auto-resolved by run.sh); older runs fall back to model_files.json.
 Meta columns: Ctx = context window in use (k tokens), Cmp = auto-detected context compactions,
 Seed = generation seed pinning sampling ("-" = random).
 """
@@ -10,17 +11,32 @@ OUT = os.path.dirname(os.path.abspath(__file__))
 BENCHES = ["MMLU", "GSM8K", "HellaSwag", "ARC-Chall", "MATH",
            "WinoGrande", "BBH", "HumanEval", "Terminal", "TermHard"]
 
-FIXED_WIDTH = 226
-MODEL_W = 24
-RUNID_W = 24
+FIXED_WIDTH = 221
+FILE_W = 48
 BENCH_W = 7
 OVERALL_W = 8
 TIME_W = 12
 CTX_W = 7
 CMP_W = 4
 SEED_W = 9
-NOTE_W = 67
-# MODEL_W + RUNID_W + BENCH_W*len(BENCHES) + OVERALL_W + TIME_W + CTX_W + CMP_W + SEED_W + NOTE_W + 1 (sep) == 226
+NOTE_W = 62
+# FILE_W + BENCH_W*len(BENCHES) + OVERALL_W + TIME_W + CTX_W + CMP_W + SEED_W + NOTE_W + 1 (sep) == 221
+
+# alias -> GGUF filename; fallback for runs whose meta lacks an auto-resolved model_file
+MODEL_FILES = {}
+_mp = os.path.join(OUT, "model_files.json")
+if os.path.exists(_mp):
+    with open(_mp) as _f:
+        MODEL_FILES = json.load(_f)
+
+
+def resolve_model(run_name):
+    """Match run_name against known model aliases (longest first)."""
+    for model in sorted(MODEL_FILES, key=len, reverse=True):
+        if run_name == model or run_name.startswith(model + "_"):
+            return model
+    # fallback: partition on first underscore
+    return run_name.partition("_")[0]
 
 # short column labels (fit in BENCH_W)
 SHORT = {
@@ -72,8 +88,7 @@ def main():
     print(title)
     print("=" * FIXED_WIDTH)
 
-    hdr = f"{'model':<{MODEL_W}s}"
-    hdr += f"{'run id':<{RUNID_W}s}"
+    hdr = f"{'file':<{FILE_W}s}"
     for b in BENCHES:
         hdr += f"{SHORT[b]:>{BENCH_W}s}"
     hdr += f"{'OVERALL':>{OVERALL_W}s}"
@@ -86,16 +101,15 @@ def main():
     print("-" * FIXED_WIDTH)
 
     for run_name, d in rows.items():
-        # RUN_NAME = <MODEL>_<RUN_ID>; neither part contains an underscore (run.sh makes SAFE_MODEL with / -> -)
-        model, _, run_id = run_name.partition("_")
-        row = f"{trunc(model, MODEL_W):<{MODEL_W}s}"
-        row += f"{trunc(run_id, RUNID_W):<{RUNID_W}s}"
+        model = resolve_model(run_name)
+        meta = load_meta(run_name) or {}
+        fname = meta.get("model_file") or MODEL_FILES.get(model, model)
+        row = f"{trunc(fname, FILE_W):<{FILE_W}s}"
         for b in BENCHES:
             v = d["per_benchmark"].get(b)
             row += f"{v['acc']:>{BENCH_W - 1}.1f}%" if v else f"{'-':>{BENCH_W}s}"
         row += f"{d['overall']['acc']:>{OVERALL_W - 1}.1f}%"
         row += f"{fmt_time(load_timing(run_name, d)):>{TIME_W}s}"
-        meta = load_meta(run_name) or {}
         ctx = meta.get("context_size")
         row += f"{(f'{ctx // 1000}k' if ctx else '-'):>{CTX_W}s}"
         cmp_ = meta.get("compactions")
@@ -107,6 +121,21 @@ def main():
         print(row)
 
     print("=" * FIXED_WIDTH)
+
+    # loop footnotes
+    any_loops = False
+    for run_name, d in rows.items():
+        loops = d.get("overall", {}).get("loop_benches")
+        if loops:
+            if not any_loops:
+                any_loops = True
+                print()
+                print("!!! LOOP DETECTION FOOTNOTES !!!")
+            run_label = resolve_model(run_name)
+            for entry in loops:
+                bench = entry["bench"]
+                reason = entry["reason"]
+                print(f"  * {run_label} / {bench}: score = 0 — {reason}")
 
 
 if __name__ == "__main__":

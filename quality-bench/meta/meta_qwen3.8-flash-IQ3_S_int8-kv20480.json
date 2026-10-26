@@ -1,0 +1,6 @@
+{
+ "notes": "kv-resident 20480 mtp-hnorm stream",
+ "context_size": 256000,
+ "seed": 1234,
+ "model_file": "Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S"
+}

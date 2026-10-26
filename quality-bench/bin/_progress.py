@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 
-LOOP_LIMIT = 5        # same tool command this many times in a row
+LOOP_LIMIT = 10       # same tool command OR assistant text this many times in a row
 IDLE_LIMIT = 15 * 60  # no stream event for this many seconds
 
 
@@ -33,17 +33,27 @@ def render(e):
     return None
 
 
-def kill(name, reason):
+def kill(name, reason, run_name=None, bench=None):
     print(f"!! {reason} — killing container {name}", flush=True)
     try:
         subprocess.run(["docker", "kill", name], timeout=30, capture_output=True)
     except Exception as ex:
         print(f"!! docker kill failed: {ex}", flush=True)
+    if run_name and bench and reason.startswith("LOOP"):
+        marker = os.path.join(".", "runs", run_name, f".loop_{bench}")
+        try:
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            with open(marker, "w") as f:
+                f.write(reason + "\n")
+        except Exception:
+            pass
 
 
-def main(name):
+def main(name, run_name=None, bench=None):
     last_cmd = None
-    repeats = 0
+    last_text = None
+    cmd_repeats = 0
+    text_repeats = 0
     last_event = time.monotonic()
     while True:
         ready, _, _ = select.select([sys.stdin], [], [], 30)
@@ -62,11 +72,31 @@ def main(name):
             continue
         if e.get("type") == "tool_execution_start":
             cmd = str((e.get("args") or {}).get("command", ""))
-            repeats = repeats + 1 if cmd == last_cmd else 1
-            last_cmd = cmd
-            if repeats >= LOOP_LIMIT:
-                kill(name, f"LOOP: same command repeated {repeats}x: {cmd[:80]}")
+            if cmd == last_cmd:
+                cmd_repeats += 1
+            else:
+                cmd_repeats = 1
+                last_cmd = cmd
+            if cmd_repeats >= LOOP_LIMIT:
+                kill(name, f"LOOP: same command repeated {cmd_repeats}x: {cmd[:80]}", run_name, bench)
                 return 1
+            text_repeats = 0
+        elif e.get("type") == "message_end" and (e.get("message") or {}).get("role") == "assistant":
+            txt = "".join(
+                c.get("text", "") for c in (e.get("message") or {}).get("content", [])
+                if isinstance(c, dict) and c.get("type") == "text"
+            ).strip()
+            if txt:
+                if txt == last_text:
+                    text_repeats += 1
+                else:
+                    text_repeats = 1
+                    last_text = txt
+                if text_repeats >= LOOP_LIMIT:
+                    kill(name, f"LOOP: same assistant text repeated {text_repeats}x", run_name, bench)
+                    return 1
+            else:
+                text_repeats = 0
         out = render(e)
         if out:
             print(out, flush=True)
@@ -85,5 +115,21 @@ if __name__ == "__main__":
         assert lines == ["-> bash: ls -la\npwd", "Reading batch 1.", "!! bash failed", "=== agent finished ==="], lines
         print("selftest ok")
     else:
-        name = sys.argv[2] if len(sys.argv) > 2 and sys.argv[1] == "--name" else None
-        sys.exit(main(name))
+        args = sys.argv[1:]
+        name = None
+        run_name = None
+        bench = None
+        i = 0
+        while i < len(args):
+            if args[i] == "--name" and i + 1 < len(args):
+                name = args[i + 1]
+                i += 2
+            elif args[i] == "--run-name" and i + 1 < len(args):
+                run_name = args[i + 1]
+                i += 2
+            elif args[i] == "--bench" and i + 1 < len(args):
+                bench = args[i + 1]
+                i += 2
+            else:
+                i += 1
+        sys.exit(main(name, run_name, bench))

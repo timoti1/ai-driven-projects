@@ -1,0 +1,12 @@
+{
+  "qwen3.8-27b-IQ3S-ROCm": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp",
+  "qwen3.8-27b-IQ3S-ROCm-Sapphire": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp",
+  "qwen3.8-27b-IQ3XXS": "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp",
+  "qwen3.8-27b-IQ3XXS-Sapphire": "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp",
+  "qwen3.8-27b-IQ3XXS-Uncensored": "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored-MTP",
+  "qwen3.8-27b-IQ3XXS-Uncensored-Sapphire": "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored-MTP",
+  "qwen3.8-27b-IQ3XXS-Uncensored-C2": "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-Uncensored-v1.1",
+  "qwen3.8-flash-IQ3_XXS": "Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_XXS",
+  "qwen3.8-flash-IQ3_S": "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S",
+  "tiel-coder-35b-a3b": "Tiel-Coder-35B-A3B-MTP-UD-IQ4_XS"
+}
