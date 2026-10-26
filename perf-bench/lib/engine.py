@@ -19,13 +19,14 @@ def corpus_tokens(n, chars_per_token=4):
 
 
 class Probe:
-    def __init__(self, base, api_key="", timeout=600):
+    def __init__(self, base, api_key="", timeout=600, path_prefix=""):
         self.base = base.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.path_prefix = path_prefix
 
     def _post(self, path, body, stream=False):
-        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode(),
+        req = urllib.request.Request(self.base + self.path_prefix + path, data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json",
                                               **({"Authorization": "Bearer " + self.api_key} if self.api_key else {})})
         return time.time(), urllib.request.urlopen(req, timeout=self.timeout)
@@ -65,14 +66,14 @@ class Probe:
     def case_health(self, name, suite):
         t0 = time.time()
         try:
-            r = urllib.request.urlopen(self.base + "/health", timeout=15)
+            r = urllib.request.urlopen(self.base + self.path_prefix + "/health", timeout=15)
             ok, code = True, r.getcode()
         except Exception:
             ok, code = False, None
         dt_h = time.time() - t0
         t1 = time.time()
         try:
-            r = urllib.request.urlopen(self.base + "/v1/models", timeout=15)
+            r = urllib.request.urlopen(self.base + self.path_prefix + "/v1/models", timeout=15)
             data = json.load(r)
             ids = [m.get("id") for m in data.get("data", [])]
         except Exception as e:

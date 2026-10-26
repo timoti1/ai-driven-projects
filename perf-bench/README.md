@@ -14,6 +14,19 @@ python3 bench.py --target local --model PUT-MODEL --tests health,prefill,decode
 python3 summarize.py               # markdown pivot of results/runs.csv
 ```
 
+Remote / hosted models (OpenRouter, OpenAI, and any Pi-agent-accessible OpenAI-compatible endpoint):
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+python3 bench.py --target openrouter --model openrouter/auto --tests health,prefill,decode
+
+# via plain flags (OpenRouter needs path_prefix=/api):
+python3 bench.py --scheme https --host openrouter.ai --port 443 --path-prefix /api \
+  --model openrouter/auto --api-key-env OPENROUTER_API_KEY --tests health,decode
+
+# any endpoint Pi agent proxies (e.g. its local llama.cpp router):
+python3 bench.py --host <router-host> --port <port> --model <model-id> --api-key-env <KEY_VAR>
+```
+
 Windows: `powershell -File install.ps1` then `pb --config perf-bench.json`.
 
 ## Resolution order
@@ -39,7 +52,8 @@ it is unclear what to benchmark (exit code 2)** instead of guessing.
 ## Useful flags
 
 `--target host:port` (repeatable, or preset name) · `--host/--port/--scheme/--model` ·
-`--api-key-env VAR` (key lives in the environment, never in files) ·
+`--api-key-env VAR` (key lives in the environment, never in files) · `--api-key KEY` (literal, less secure) ·
+`--path-prefix PREFIX` (URL prefix before /v1/..., e.g. /api for OpenRouter) ·
 `--tests name[,name]` or a suite json · `--depths 1024,8192,32768` ·
 `--pp-sizes 512,2048,8192` · `--repeat N` · `--timeout S` · `--gpu auto|off` ·
 `--out DIR` · `--tag LABEL` (groups runs in summaries) · `--dry-run` · `--list-tests` · `--list-targets`

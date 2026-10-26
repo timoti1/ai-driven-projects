@@ -58,6 +58,8 @@ def build_parser():
     p.add_argument("--scheme", help="http or https (default http)")
     p.add_argument("--model", help="model id to test (required unless --dry-run/--list-tests)")
     p.add_argument("--api-key-env", help="name of the env var holding the API key")
+    p.add_argument("--api-key", help="API key literal (less secure; prefer --api-key-env)")
+    p.add_argument("--path-prefix", help="URL path prefix inserted before /v1/..., e.g. /api for OpenRouter")
     p.add_argument("--tests", help="comma list of: " + ",".join(BUILTIN_TESTS) + " or a test-suite file")
     p.add_argument("--tag", help="label for this run (used in summaries)")
     p.add_argument("--depths", help="override context depths for tg/kv tests, e.g. 1024,8192,32768")
@@ -98,12 +100,16 @@ def resolve_targets(args, cfg, presets):
             base["model"] = args.model
         if args.api_key_env:
             base["api_key_env"] = args.api_key_env
+        if args.api_key:
+            base["api_key"] = args.api_key
+        if args.path_prefix:
+            base["path_prefix"] = args.path_prefix
         out.append(base)
     if not out:
         c = cfg.get("target")
         if isinstance(c, dict):
             out.append(dict(c))
-    defaults = {"host": "127.0.0.1", "port": 8080, "scheme": "http", "model": args.model or cfg.get("model")}
+    defaults = {"host": "127.0.0.1", "port": 8080, "scheme": "http", "model": args.model or cfg.get("model"), "path_prefix": ""}
     for t in out:
         for k, v in defaults.items():
             t.setdefault(k, v)
@@ -184,8 +190,9 @@ def main():
                                 tag, timeout)
     else:
         for t in targets:
-            key = os.environ.get(t.get("api_key_env") or "", "") if t.get("api_key_env") else ""
-            pr = Probe(t["scheme"] + "://" + t["host"] + ":" + str(t["port"]), key, timeout)
+            key = t.get("api_key") or args.api_key or (os.environ.get(t.get("api_key_env") or "", "") if t.get("api_key_env") else "")
+            pr = Probe(t["scheme"] + "://" + t["host"] + ":" + str(t["port"]), key, timeout,
+                       t.get("path_prefix") or "")
             util.log(f"target {pr.base} model={t['model']}")
             gpu_snap = util.gpu_snapshot(gpu_mode)
             for suite_name, suite in suites:
