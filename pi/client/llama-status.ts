@@ -123,6 +123,7 @@ interface StatsGpu {
 interface Stats {
   updated_at: number;
   gpus: StatsGpu[];
+  unattributed?: { model: string; gen: number; pp: number }[];
 }
 
 const state: {
@@ -348,6 +349,16 @@ function buildLines(theme: any, width: number): string[] {
     const label = `${alias}: `;
     const statsLine = hwStats[i].map((s, j) => padVisible(s, maxStatW[j])).join("  ");
     L.push(truncateToWidth(label + statsLine, width));
+  }
+
+  // Live rates the server could not charge to any card: shown, never guessed onto one.
+  const unatt = state.stats?.unattributed ?? [];
+  if (unatt.length) {
+    const items = unatt.map(u => {
+      const tps = u.gen > 0 ? u.gen : u.pp;
+      return `${dim(u.model)} ${tps > 0 ? speedColor(tps, fmt(tps) + " t/s", theme) : dim("idle")}`;
+    }).join("  ");
+    L.push(truncateToWidth(warn("⚠ card unknown: ") + items, width));
   }
 
   L.push("");
