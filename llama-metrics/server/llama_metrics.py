@@ -725,7 +725,7 @@ RE_STRATA_GEN = re.compile(
     r"\[strata\].*?:\s*([\d,]+)\s+of\s+(?:max\s+([\d,]+)|budget\s+[\d,]+\s*\(max\s+[\d,]+\))"
     r"\s+tokens,\s*([\d.]+)\s+tok/s")
 RE_STRATA_PP = re.compile(
-    r"\[strata\].*?reading the prompt:\s*([\d,]+)(?:\s+of\s+([\d,]+))?\s+tokens,\s*([\d.]+)\s+tok/s,\s*([\d.]+)\s+s")
+    r"\[strata\].*?reading the prompt:\s*([\d,]+)(?:\s+of\s+([\d,]+))?\s+tokens,\s*(?:([\d.]+)\s+tok/s,\s*)?([\d.]+)\s+s")
 RE_STRATA_DONE = re.compile(
     r"\[strata\].*?\bdone:\s*([\d,]+)\s+tokens in\s+[\d.,]+\s+s\s*\(([\d.]+)\s+tok/s\)")
 RE_STRATA_REQ = re.compile(
@@ -816,7 +816,8 @@ def parse_strata(line, js):
     m = RE_STRATA_PP.search(line)
     if m:
         n_read, n_total = _num(m.group(1)), (_num(m.group(2)) if m.group(2) else 0)
-        speed, t_sofar = _num(m.group(3)), _num(m.group(4))
+        speed = _num(m.group(3)) if m.group(3) else 0.0
+        t_sofar = _num(m.group(4))
         # Delta between progress lines excludes the initial cache-read burst.
         prev = js.get("strata_pp_prev")
         live = speed
