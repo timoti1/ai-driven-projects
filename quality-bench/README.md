@@ -15,7 +15,7 @@ containers, and scores the results deterministically.
 | `terminal_sandboxes_hard/` | clean hard terminal task sandboxes (50 tasks) |
 | `runs/` | per-run artifacts: `runs/<MODEL>_<RUN_ID>/` (answers, solutions, terminal outputs, event logs) |
 | `results/` | `results_<RUN_NAME>.json` — per-benchmark scores + time |
-| `meta/` | `meta_<RUN_NAME>.json` — run metadata (notes, context size, compactions — recorded automatically by run.sh) |
+| `meta/` | `meta_<RUN_NAME>.json` — run metadata (notes, context size, auto-resolved model file, compactions — recorded automatically by run.sh) |
 | `bin/` | container helper scripts (`_show_batch.py`, `_append_batch.py`, `_time.py`, `_progress.py`) |
 | `.stage/` | transient per-run staging (deleted on full success) |
 | `.benchenv/` | Python venv for the host-side scripts |
@@ -40,9 +40,31 @@ containers, and scores the results deterministically.
 ./.benchenv/bin/python prepare_terminal.py
 ./.benchenv/bin/python prepare_terminal_hard.py
 
-# 2. run a model (LM Studio serving the model)
+# 2. run a model (default: LM Studio at 192.168.1.104:8080)
 ./run.sh <MODEL> [RUN_ID] [NOTE] [SEED]
 # optional SEED (or BENCH_SEED env) pins generation sampling for reproducible runs
+
+# remote / hosted models (OpenRouter, OpenAI, any OpenAI-compatible endpoint):
+export OPENROUTER_API_KEY=sk-or-...
+BENCH_HOST=openrouter.ai BENCH_PORT=443 BENCH_SCHEME=https BENCH_PATH_PREFIX=/api \
+  BENCH_API_KEY_ENV=OPENROUTER_API_KEY BENCH_API=openai-completions \
+  ./run.sh nvidia/nemotron-3.5-super-vl:free [RUN_ID] [NOTE] [SEED]
+
+# env var reference:
+#   BENCH_HOST / BENCH_PORT / BENCH_SCHEME   -> endpoint (default: 192.168.1.104:8080 http)
+#   BENCH_PATH_PREFIX                       -> URL prefix before /v1/... (OpenRouter: /api)
+#   BENCH_API_KEY_ENV                       -> env var name holding the API key
+#   BENCH_API_KEY                           -> literal key fallback (less secure)
+#   BENCH_API                               -> pi agent api value (default: openai-completions)
+#   BENCH_CTX                               -> context window override (auto-detected for llama-swap)
+#   BENCH_SKIP_FILE_LOOKUP=1                -> skip GGUF file resolution (needed for remote endpoints)
+#   LMSTUDIO_HOST / LMSTUDIO_PORT / LMSTUDIO_KEY   -> legacy aliases for BENCH_HOST/PORT/KEY
+
+# Loop detection (prevents infinite loops on a stubborn model):
+#   bin/_progress.py watches the pi event stream inside each container and kills
+#   the container if the same assistant text or the same tool command repeats
+#   10 times in a row (LOOP_LIMIT = 10). The run moves to the next bench and the
+#   killed one is marked FAILED. Check pi_stream_<bench>.jsonl to debug.
 
 # 3. score + compare
 ./.benchenv/bin/python score.py <RUN_NAME>

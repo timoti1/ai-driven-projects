@@ -1,0 +1,4 @@
+{
+ "notes": "b1024, ub1024, mtp2, rea low/4096, Q4_0/Q4_0, 150k ctx",
+ "context_size": 150000
+}

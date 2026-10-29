@@ -173,6 +173,7 @@ def main():
     print(f"RESULTS — model: {model}")
     print("=" * 64)
     summary = {}
+    loop_benches = []
 
     def report(name, correct, total, kind, test_name=None):
         acc = 100 * correct / total if total else 0
@@ -183,6 +184,13 @@ def main():
         if t is not None:
             entry["time_s"] = t
         summary[name] = entry
+
+    # detect loop markers written by _progress.py
+    for b in BENCH_NAMES:
+        marker = os.path.join(run_dir, f".loop_{b}")
+        if os.path.exists(marker):
+            with open(marker) as f:
+                loop_benches.append((b, f.read().strip()))
 
     # MMLU
     c, n = score_mc(A.get("mmlu", {}), load("truth_mmlu.json"))
@@ -230,9 +238,18 @@ def main():
     time_str = f"  [{tot_time:.1f}s]" if any(v.get("time_s") for v in summary.values()) else ""
     print(f"OVERALL      {tot_c}/{tot_n} = {100*tot_c/tot_n:.1f}%{time_str}")
 
+    # loop footnotes
+    if loop_benches:
+        print()
+        print("!!! LOOP DETECTION FOOTNOTES !!!")
+        for bench_key, reason in loop_benches:
+            print(f"  * {bench_key}: score = 0 — {reason}")
+
     overall = {"correct": tot_c, "total": tot_n, "acc": round(100 * tot_c / tot_n, 2)}
     if any(v.get("time_s") for v in summary.values()):
         overall["time_s"] = round(tot_time, 1)
+    if loop_benches:
+        overall["loop_benches"] = [{"bench": b, "reason": r} for b, r in loop_benches]
 
     results_dir = os.path.join(OUT, "results")
     os.makedirs(results_dir, exist_ok=True)

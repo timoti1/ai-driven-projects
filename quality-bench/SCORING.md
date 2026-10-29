@@ -66,6 +66,25 @@ a bench keeps the previous attempt's event log as `pi_stream_<bench>.attemptN.js
 `INSTRUCTIONS.md` is mounted from the bench root into every container at launch,
 so editing it needs no `docker build`; only Dockerfile changes (helpers, pi version) do.
 
+### Loop detection (prevents infinite loops on a stubborn model)
+
+`bin/_progress.py` watches the pi event stream inside each container and kills the
+container if the same assistant text or the same tool command repeats 10 times in a row
+(`LOOP_LIMIT = 10`). The killed bench is marked FAILED and `run.sh` moves to the next
+bench. Raw event logs are kept at `runs/<RUN_NAME>/pi_stream_<bench>.jsonl` (plus
+`pi_stream_<bench>.attemptN.jsonl` for retries) so you can debug what the model was
+repeating.
+
+If a model loops on a particular bench (e.g. ARC), that bench will not produce answers
+and its score will be 0 — this is expected behavior for an unresponsive model. To retry
+a failed bench only:
+
+```bash
+RESUME=1 ./run.sh <MODEL> <same RUN_ID>
+```
+
+Completed benches are skipped; incomplete ones continue where they stopped.
+
 ### Step 1. Quick verification (host-side)
 
 ```bash

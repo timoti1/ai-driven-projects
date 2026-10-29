@@ -7,6 +7,7 @@ Reads:
     bench/results/results_*.json  — per-model scoring results
     bench/meta/meta_<model>.json  — (optional) run metadata:
         {
+          "model_file": "...",
           "context_size": 32768,
           "compactions": 3,
           "notes": "..."
@@ -14,11 +15,11 @@ Reads:
         Missing file -> those columns show "-".
 
 Output:
-    1) Summary table: model x benchmark (acc %) + OVERALL + Time.
+    1) Summary table: file x benchmark (acc %) + OVERALL + Time.
     2) Per-model detail: correct/total, acc, per-test time, total time,
        context and compactions (when meta exists).
 
-Both tables are FIXED_WIDTH=151 chars; long model names/notes get an ellipsis.
+Both tables are FIXED_WIDTH=169 chars; long filenames/notes get an ellipsis.
 """
 import json, os, glob
 
@@ -26,13 +27,28 @@ OUT = os.path.dirname(os.path.abspath(__file__))
 BENCHES = ["MMLU", "GSM8K", "HellaSwag", "ARC-Chall", "MATH",
            "WinoGrande", "BBH", "HumanEval", "Terminal", "TermHard"]
 
-FIXED_WIDTH = 151
-MODEL_W = 30
+FIXED_WIDTH = 169
+FILE_W = 48
 BENCH_W = 7
 OVERALL_W = 8
 TIME_W = 12
 NOTE_W = 30
-# MODEL_W + BENCH_W*len(BENCHES) + OVERALL_W + TIME_W + NOTE_W + 1 (sep) == 151
+# FILE_W + BENCH_W*len(BENCHES) + OVERALL_W + TIME_W + NOTE_W + 1 (sep) == 169
+
+# alias -> GGUF filename; fallback for runs whose meta lacks an auto-resolved model_file
+MODEL_FILES = {}
+_mp = os.path.join(OUT, "model_files.json")
+if os.path.exists(_mp):
+    with open(_mp) as _f:
+        MODEL_FILES = json.load(_f)
+
+
+def resolve_model(run_name):
+    """Match run_name against known model aliases (longest first)."""
+    for model in sorted(MODEL_FILES, key=len, reverse=True):
+        if run_name == model or run_name.startswith(model + "_"):
+            return model
+    return run_name.partition("_")[0]
 
 # short column labels (fit in BENCH_W)
 SHORT = {
@@ -85,7 +101,7 @@ def main():
     print(title)
     print("=" * FIXED_WIDTH)
 
-    hdr = f"{'model':<{MODEL_W}s}"
+    hdr = f"{'file':<{FILE_W}s}"
     for b in BENCHES:
         hdr += f"{SHORT[b]:>{BENCH_W}s}"
     hdr += f"{'OVERALL':>{OVERALL_W}s}"
@@ -94,24 +110,29 @@ def main():
     print(hdr)
     print("-" * FIXED_WIDTH)
 
-    for model, d in rows.items():
-        row = f"{trunc(model, MODEL_W):<{MODEL_W}s}"
+    for run_name, d in rows.items():
+        model = resolve_model(run_name)
+        meta = load_meta(run_name) or {}
+        fname = meta.get("model_file") or MODEL_FILES.get(model, model)
+        row = f"{trunc(fname, FILE_W):<{FILE_W}s}"
         for b in BENCHES:
             v = d["per_benchmark"].get(b)
             row += f"{v['acc']:>{BENCH_W - 1}.1f}%" if v else f"{'-':>{BENCH_W}s}"
         row += f"{d['overall']['acc']:>{OVERALL_W - 1}.1f}%"
         t = sum(v.get("time_s", 0) for v in d["per_benchmark"].values() if v)
         row += f"{fmt_time(t):>{TIME_W}s}"
-        note = (load_meta(model) or {}).get("notes")
+        note = meta.get("notes")
         row += f" {trunc(note, NOTE_W):<{NOTE_W}s}" if note else f" {'-':<{NOTE_W}s}"
         print(row)
     print()
 
     # ---------- 2) per-model detail ----------
-    for model, d in rows.items():
-        meta = load_meta(model)
+    for run_name, d in rows.items():
+        model = resolve_model(run_name)
+        meta = load_meta(run_name)
+        fname = (meta or {}).get("model_file") or MODEL_FILES.get(model, model)
         print("=" * FIXED_WIDTH)
-        print(f"MODEL: {model}")
+        print(f"FILE: {fname}")
         print("=" * FIXED_WIDTH)
 
         b_w = max(len(b) for b in BENCHES) + 2
@@ -147,8 +168,8 @@ def main():
             if meta.get("notes"):
                 print(f"  note:            {meta['notes']}")
         else:
-            print(f"  model context:   - (no meta_{model}.json)")
-            print(f"  compactions:     - (no meta_{model}.json)")
+            print(f"  model context:   - (no meta_{run_name}.json)")
+            print(f"  compactions:     - (no meta_{run_name}.json)")
         print()
 
 
