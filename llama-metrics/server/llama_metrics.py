@@ -62,6 +62,7 @@ perf = {
     "gen": 0.0, "pp": 0.0, "source": "none",
     "mtp": 0.0, "mtp_valid": False,
     "model": None,
+    "unattributed": [],
     "last_activity": 0, "last_gpu_busy": 0, "updated_at": 0,
 }
 gpu = {"gpus": [], "updated_at": 0}
@@ -157,44 +158,204 @@ _nvidia_cache = {"gpus": [], "at": 0.0}
 
 
 
-# ---- Vulkan device -> DRM card index mapping ----
-# Vulkan device indices don't always match DRM card indices. Determine the
-# actual mapping by reading the process's render device from /proc/<pid>/maps.
-def _vulkan_to_card(pid):
-    """Map a process's Vulkan device to its DRM card index.
-    Reads /proc/<pid>/maps for /dev/dri/renderD*, then resolves the PCI address
-    to find the matching card index."""
-    try:
-        with open(f"/proc/{pid}/maps") as f:
-            maps = f.read()
-    except Exception:
+# ---- GPU identity primitives: the PCI slot is the stable key for a card ----
+_amd_slots = []   # PCI slot per AMD card, in published GPU list order
+_nv_slots = []    # PCI slot per nvidia-smi index, published after the AMD cards
+_render_cache = {"map": {}, "at": 0.0}
+_kfd_cache = {"slots": [], "at": 0.0}
+_RENDER_TTL_S = 10.0
+_KFD_TTL_S = 300.0
+
+
+def _normalize_bus_id(raw):
+    """PCI bus id in any spelling to the canonical 0000:bb:dd.f form."""
+    parts = (raw or "").strip().lower().split(":")
+    if len(parts) != 3 or not parts[0]:
         return None
-    # Find render device (e.g., /dev/dri/renderD128)
-    m = re.search(r"/dev/dri/(renderD\d+)", maps)
+    parts[0] = parts[0][-4:].zfill(4)
+    return ":".join(parts)
+
+
+def _published_slots():
+    """PCI slots in published GPU list order; scans sysfs until the first system poll fills it."""
+    with _lock:
+        slots = list(_amd_slots) + list(_nv_slots)
+    if slots:
+        return slots
+    out = []
+    for dev in sorted(glob.glob("/sys/class/drm/card[0-9]*/device")):
+        if not os.path.exists(os.path.join(dev, "gpu_busy_percent")):
+            continue
+        s = _normalize_bus_id(_pci_slot(dev))
+        if s:
+            out.append(s)
+    with _lock:
+        if not _amd_slots and not _nv_slots:
+            _amd_slots[:] = out
+    return out
+
+
+def _gpu_index_for_slot(slot):
+    """Published-GPU list index owning a PCI slot; None if that card is not published."""
+    want = _normalize_bus_id(slot)
+    if not want:
+        return None
+    slots = _published_slots()
+    return slots.index(want) if want in slots else None
+
+
+def _render_slots():
+    """render node name -> PCI slot, from /dev/dri/by-path with a /sys fallback."""
+    now = time.time()
+    if now - _render_cache["at"] < _RENDER_TTL_S:
+        return _render_cache["map"]
+    m = {}
+    for link in glob.glob("/dev/dri/by-path/*-render"):
+        pm = re.search(r"pci-([0-9a-f:.]+)-render", os.path.basename(link))
+        if pm:
+            m[os.path.basename(os.path.realpath(link))] = _normalize_bus_id(pm.group(1))
+    if not m:
+        for dev in glob.glob("/sys/class/drm/renderD[0-9]*/device"):
+            slot = _pci_slot(dev)
+            if slot:
+                m[os.path.basename(os.path.dirname(dev))] = _normalize_bus_id(slot)
+    _render_cache["map"] = m
+    _render_cache["at"] = now
+    return m
+
+
+def _render_order_slots():
+    """PCI slots in ascending render-node order, which is how Vulkan numbers devices."""
+    m = _render_slots()
+    return [m[name] for name in sorted(m, key=lambda n: int(n[7:]))]
+
+
+def _nv_pci_order():
+    """PCI slots in nvidia-smi index order, which is what CUDA_VISIBLE_DEVICES indexes."""
+    with _lock:
+        return list(_nv_slots)
+
+
+def _kfd_gpu_slots():
+    """PCI slots of compute-capable GPUs in ROCm/HIP device order (KFD topology order)."""
+    now = time.time()
+    if now - _kfd_cache["at"] < _KFD_TTL_S:
+        return _kfd_cache["slots"]
+    out = []
+    for node in sorted(glob.glob("/sys/class/kfd/kfd/topology/nodes/*"),
+                       key=lambda p: int(os.path.basename(p))):
+        try:
+            with open(os.path.join(node, "properties")) as f:
+                text = f.read()
+        except Exception:
+            continue
+        simd = re.search(r"^simd_count (\d+)", text, re.M)
+        loc = re.search(r"^location_id (\d+)", text, re.M)
+        if not simd or not loc or int(simd.group(1)) <= 0:
+            continue
+        lid = int(loc.group(1))  # packed segment | bus | device | function
+        out.append("%04x:%02x:%02x.%d" % ((lid >> 16) & 0xFFFF, (lid >> 8) & 0xFF,
+                                          (lid >> 3) & 0x1F, lid & 0x07))
+    _kfd_cache["slots"] = out
+    _kfd_cache["at"] = now
+    return out
+
+
+def _proc_text(pid, name):
+    try:
+        with open(f"/proc/{pid}/{name}", "rb") as f:
+            return f.read().decode("utf-8", "replace")
+    except Exception:
+        return ""
+
+
+def _proc_ppid(pid):
+    """Parent pid; comm can contain spaces and parens, so split only after the last ')'."""
+    tail = _proc_text(pid, "stat").rsplit(")", 1)[-1].split()
+    return tail[1] if len(tail) > 1 and tail[1].isdigit() else None
+
+
+def _proc_env(pid):
+    env = {}
+    for chunk in _proc_text(pid, "environ").split("\0"):
+        k, sep, v = chunk.partition("=")
+        if sep:
+            env[k] = v
+    return env
+
+
+def _proc_render_bytes(pid):
+    """render node -> bytes the process maps there; buffer residency, not device opening."""
+    out = {}
+    for line in _proc_text(pid, "maps").splitlines():
+        fields = line.split()
+        if len(fields) < 6 or "renderD" not in fields[-1]:
+            continue
+        try:
+            lo, hi = fields[0].split("-")
+            size = int(hi, 16) - int(lo, 16)
+        except Exception:
+            continue
+        name = fields[-1].rsplit("/", 1)[-1]
+        out[name] = out.get(name, 0) + size
+    return out
+
+
+def _proc_open_renders(pid):
+    """Distinct DRM render nodes the process holds open."""
+    out = set()
+    for fd in glob.glob(f"/proc/{pid}/fd/*"):
+        try:
+            link = os.readlink(fd)
+        except Exception:
+            continue
+        if "renderD" in link:
+            out.add(link.rsplit("/", 1)[-1])
+    return out
+
+
+def _api_device_order(api, env):
+    """Device enumeration order an index refers to, per engine API."""
+    api = (api or "").lower()
+    if api in ("cuda", "nv"):
+        return _nv_pci_order()
+    if api in ("hip", "rocm", "roc", "rocr"):
+        return _kfd_gpu_slots()
+    if api in ("vk", "vulkan"):
+        return _render_order_slots()
+    if env.get("HIP_VISIBLE_DEVICES") or env.get("ROCR_VISIBLE_DEVICES"):
+        return _kfd_gpu_slots()
+    if env.get("CUDA_VISIBLE_DEVICES"):
+        return _nv_pci_order()
+    return _render_order_slots()
+
+
+def _slot_for_api_device(token, env):
+    """Engine device token ('1', 'HIP1', 'cuda:0', 'vulkan0') -> PCI slot."""
+    m = re.fullmatch(r"(?i)(?:(hip|rocm|roc|rocr|cuda|nv|vulkan|vk)??[-_ :]?|)(\d+)",
+                     (token or "").strip())
     if not m:
         return None
-    render_dev = m.group(1)
-    # Resolve render device to PCI address via /dev/dri/by-path
-    try:
-        for link in glob.glob("/dev/dri/by-path/*-render"):
-            target = os.path.basename(os.path.realpath(link))
-            if target == render_dev:
-                # Extract PCI address from symlink name
-                pm = re.search(r"pci-([0-9a-f:.]+)", link)
-                if pm:
-                    pci_addr = pm.group(1)
-                    # Find which card has this PCI address
-                    for i in range(8):
-                        card_path = f"/sys/class/drm/card{i}/device"
-                        try:
-                            real = os.path.realpath(card_path)
-                            if pci_addr in real:
-                                return i
-                        except Exception:
-                            continue
-    except Exception:
-        pass
+    order = _api_device_order(m.group(1), env)
+    idx = int(m.group(2))
+    return order[idx] if 0 <= idx < len(order) else None
+
+
+def _slot_from_visible_devices(env):
+    """First device of a *_VISIBLE_DEVICES restriction -> PCI slot."""
+    for key in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
+        val = (env.get(key) or "").strip()
+        if not val:
+            continue
+        first = val.split(",")[0].strip()
+        if first.isdigit():
+            api = "cuda" if key.startswith("CUDA") else "hip"
+            order = _api_device_order(api, env)
+            idx = int(first)
+            if 0 <= idx < len(order):
+                return order[idx]
     return None
+
 
 def _pci_slot(path):
     try:
@@ -323,6 +484,7 @@ def _find_amdgpu_hwmon_by_slot():
 
 def _read_amd_gpus():
     gpus = []
+    slots = []
     hwmon_by_slot = _find_amdgpu_hwmon_by_slot()
     for dev in sorted(glob.glob("/sys/class/drm/card[0-9]*/device")):
         busy = os.path.join(dev, "gpu_busy_percent")
@@ -372,6 +534,8 @@ def _read_amd_gpus():
             if pwr is not None:
                 g["power"] = pwr / 1e6
         gpus.append(g)
+        slots.append(_normalize_bus_id(slot))
+    _amd_slots[:] = slots
     amd_names = _load_amd_gpu_names()
     for i, g in enumerate(gpus):
         if i < len(amd_names):
@@ -388,10 +552,11 @@ def _read_nvidia_gpus():
     try:
         out = subprocess.run(
             [NVIDIA_SMI, "--query-gpu=index,name,utilization.gpu,temperature.gpu,"
-             "power.draw,memory.used,memory.total",
+             "power.draw,memory.used,memory.total,pci.bus_id",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=5,
         ).stdout
+        bus_ids = []
         for line in out.splitlines():
             parts = [p.strip() for p in line.split(",")]
             if len(parts) < 7:
@@ -415,8 +580,11 @@ def _read_nvidia_gpus():
                 "vram_temp": 0.0, "vram_used": mem_used, "vram_total": mem_total,
                 "power": power, "fan": 0.0,
             })
+            bus_ids.append(_normalize_bus_id(parts[7]) if len(parts) > 7 else None)
     except Exception:
         pass
+    if gpus:
+        _nv_slots[:] = bus_ids
     _nvidia_cache["gpus"] = gpus
     _nvidia_cache["at"] = now
     return gpus
@@ -506,25 +674,6 @@ def _list_listen_ports():
     return sorted({v for v in _listen_ports.values()})
 
 
-def _is_backend(cmd, exe):
-    if "llama-swap" in cmd:
-        return False
-    base = os.path.basename(exe or "")
-    if base in BACKEND_BASENAMES:
-        return True
-    if "llama-server" in cmd:
-        return True
-    # Strata engine (served via python wrapper + native binary)
-    if "strata" in cmd.lower() and ("serve" in cmd or "--serve" in cmd):
-        return True
-    # vllm is often spawned via an interpreter.
-    if re.search(r"\b(vllm\s+serve|vllm\.server|/vllm|serve.*--vllm)\b", cmd, re.I) or (
-        "vllm" in cmd and base not in ("llama-swap", "")):
-        return True
-    return False
-
-
-
 def poll_system():
     # Read outside the lock: subprocess-backed reads (RAPL, nvidia-smi) can
     # take seconds; holding the lock would stall every HTTP/MCP handler.
@@ -576,7 +725,7 @@ RE_STRATA_GEN = re.compile(
     r"\[strata\].*?:\s*([\d,]+)\s+of\s+(?:max\s+([\d,]+)|budget\s+[\d,]+\s*\(max\s+[\d,]+\))"
     r"\s+tokens,\s*([\d.]+)\s+tok/s")
 RE_STRATA_PP = re.compile(
-    r"\[strata\].*?reading the prompt:\s*([\d,]+)(?:\s+of\s+([\d,]+))?\s+tokens,\s*([\d.]+)\s+tok/s,\s*([\d.]+)\s+s")
+    r"\[strata\].*?reading the prompt:\s*([\d,]+)(?:\s+of\s+([\d,]+))?\s+tokens,\s*(?:([\d.]+)\s+tok/s,\s*)?([\d.]+)\s+s")
 RE_STRATA_DONE = re.compile(
     r"\[strata\].*?\bdone:\s*([\d,]+)\s+tokens in\s+[\d.,]+\s+s\s*\(([\d.]+)\s+tok/s\)")
 RE_STRATA_REQ = re.compile(
@@ -667,7 +816,8 @@ def parse_strata(line, js):
     m = RE_STRATA_PP.search(line)
     if m:
         n_read, n_total = _num(m.group(1)), (_num(m.group(2)) if m.group(2) else 0)
-        speed, t_sofar = _num(m.group(3)), _num(m.group(4))
+        speed = _num(m.group(3)) if m.group(3) else 0.0
+        t_sofar = _num(m.group(4))
         # Delta between progress lines excludes the initial cache-read burst.
         prev = js.get("strata_pp_prev")
         live = speed
@@ -931,74 +1081,127 @@ def _is_backend(cmd, exe):
     return False
 
 
+def _family_pids(pid, kids, cap=12):
+    """The port owner plus its descendants; wrapper engines hold buffers in a child."""
+    out = [pid]
+    i = 0
+    while i < len(out) and len(out) < cap:
+        out.extend(kids.get(out[i], ()))
+        i += 1
+    return out
+
+
+def _rank_render_slots(weights):
+    """Mapped bytes per render node as (slot, bytes), largest first, published cards only."""
+    rmap = _render_slots()
+    out = [(slot, n) for name, n in weights.items()
+           if (slot := rmap.get(name)) is not None]
+    out.sort(key=lambda t: -t[1])
+    return out
+
+
+def _resolve_backend_gpu(pid, cmd, kids):
+    """Card a backend works on: buffer residency first, then the engine's own device
+    choice, then a single open render node. Returns (index, how) with how unknown on a
+    genuine multi-card split, where no single card can be claimed."""
+    fam = _family_pids(pid, kids)
+    env = _proc_env(pid)
+    weights = {}
+    for p in fam:
+        for name, n in _proc_render_bytes(p).items():
+            weights[name] = weights.get(name, 0) + n
+    ranked = _rank_render_slots(weights)
+    if ranked:
+        top_slot, top_n = ranked[0]
+        second = ranked[1][1] if len(ranked) > 1 else 0
+        if second == 0 or top_n >= 3 * second:
+            idx = _gpu_index_for_slot(top_slot)
+            if idx is not None:
+                return idx, "buffers"
+    m_dev = re.search(r"--device[ =](\S+)", cmd)
+    if m_dev:
+        idx = _gpu_index_for_slot(_slot_for_api_device(m_dev.group(1), env))
+        if idx is not None:
+            return idx, "device-flag"
+    idx = _gpu_index_for_slot(_slot_from_visible_devices(env))
+    if idx is not None:
+        return idx, "visible-devices"
+    opened = set()
+    for p in fam:
+        opened |= _proc_open_renders(p)
+    if len(opened) == 1:
+        idx = _gpu_index_for_slot(_render_slots().get(next(iter(opened))))
+        if idx is not None:
+            return idx, "render-node"
+    return None, "unknown"
+
+
 def discover_registry():
     """Map LISTEN ports -> {pid, gpu} for inference backends; prune dead entries."""
     listen = _refresh_listen_ports()  # inode -> port
-    found = {}
-    for pid in sorted(os.listdir("/proc")):
-        if not pid.isdigit():
+    kids = {}
+    backends = []
+    for pid_s in sorted(os.listdir("/proc")):
+        if not pid_s.isdigit():
+            continue
+        ppid = _proc_ppid(pid_s)
+        if ppid:
+            kids.setdefault(ppid, []).append(pid_s)
+        cmd = _proc_text(pid_s, "cmdline").replace("\0", " ")
+        if not cmd:
             continue
         try:
-            with open(f"/proc/{pid}/cmdline", "rb") as fh:
-                cmd = fh.read().decode("utf-8", "replace").replace("\0", " ")
-        except Exception:
-            continue
-        try:
-            exe = os.path.realpath(os.path.join("/proc", pid, "exe"))
+            exe = os.path.realpath(os.path.join("/proc", pid_s, "exe"))
         except Exception:
             exe = None
-        if not _is_backend(cmd, exe):
-            continue
+        if _is_backend(cmd, exe):
+            backends.append((pid_s, cmd))
+    found = {}
+    for pid_s, cmd in backends:
         fd_inodes = set()
-        try:
-            for fd in glob.glob(f"/proc/{pid}/fd/*"):
-                try:
-                    link = os.readlink(fd)
-                    m = re.search(r"socket:\[(\d+)\]", link)
-                    if m:
-                        fd_inodes.add(int(m.group(1)))
-                except Exception:
-                    continue
-        except Exception:
-            continue
+        for fd in glob.glob(f"/proc/{pid_s}/fd/*"):
+            try:
+                link = os.readlink(fd)
+            except Exception:
+                continue
+            m = re.search(r"socket:\[(\d+)\]", link)
+            if m:
+                fd_inodes.add(int(m.group(1)))
         ports = sorted({listen[ino] for ino in fd_inodes if ino in listen})
         if not ports:
             continue
-        gpu_idx = _vulkan_to_card(int(pid))
-        if gpu_idx is None:  # wrapper processes (e.g. strata python -> native child)
-            try:
-                for child in open(f"/proc/{pid}/task/{pid}/children").read().split():
-                    gpu_idx = _vulkan_to_card(int(child))
-                    if gpu_idx is not None:
-                        break
-            except Exception:
-                pass
-        if gpu_idx is None:
-            m_dev = re.search(r"--device\s+\S*?(\d+)", cmd)
-            if m_dev:
-                gpu_idx = int(m_dev.group(1))
+        gpu_idx, via = _resolve_backend_gpu(pid_s, cmd, kids)
         for port in ports:
-            found[port] = {"pid": int(pid), "gpu": gpu_idx, "cmd": cmd[:120]}
+            found[port] = {"pid": int(pid_s), "gpu": gpu_idx, "via": via, "cmd": cmd[:120]}
     with _lock:
         _backends.clear()
         _backends.update(found)
 
 
-def _model_gpu(port, description):
-    """GPU index for a running model: process render-device first, brand-in-description fallback."""
+def _model_gpu_info(port, description):
+    """(GPU list index, how it was decided) for a running model; index None when the
+    process evidence is missing and the description names zero or several card brands."""
     with _lock:
         b = _backends.get(port)
-    if b and b.get("gpu") is not None:
-        return b["gpu"]
+        if b and b.get("gpu") is not None:
+            return b["gpu"], b.get("via", "process")
     desc = (description or "").lower()
     with _lock:
         gpus = list(gpu.get("gpus", []))
+    hits = []
     for i, g in enumerate(gpus):
         alias = (g.get("alias") or "").lower()
         brand = alias.split()[0] if alias else ""
         if brand and brand in desc:
-            return i
-    return None
+            hits.append(i)
+    if len(hits) == 1:
+        return hits[0], "description"
+    return None, "unresolved"
+
+
+def _model_gpu(port, description):
+    """GPU list index for a running model, or None when attribution is inconclusive."""
+    return _model_gpu_info(port, description)[0]
 
 
 # ====================== STRATA HTTP ENRICHMENT (progress % + drafts only) ======================
@@ -1047,14 +1250,16 @@ def merge_perf():
                 pass
 
     by_gpu = {}
+    by_gpu_act = {}
     instances = []
     pending = []
-    best_mid, best_act = None, 0
+    unattributed = []
+    best_mid, best_act, best_entry = None, 0, None
     for mid, info in running.items():
         js = streams.get(mid)
         if js is None:
             continue
-        gpu_idx = _model_gpu(info["port"], info.get("description"))
+        gpu_idx, gpu_via = _model_gpu_info(info["port"], info.get("description"))
         # Phase gating: show a phase only while its own log lines are the newest,
         # so a lingering previous-phase value never masks the current one.
         gen = round(js["gen"], 2) if now - js["gen_at"] < FRESH_RT_MS and js["gen_at"] >= js["pp_at"] else 0.0
@@ -1080,27 +1285,24 @@ def merge_perf():
             "model": mid,
         }
         instances.append({"port": info["port"], "model": mid,
-                          "gen": gen, "pp": pp, "gpu": gpu_idx})
+                          "gen": gen, "pp": pp, "gpu": gpu_idx, "gpu_via": gpu_via})
         # Prefer ready models for the headline: a stopping model is not serving.
         if info.get("state") == "ready" and js["last_activity"] > best_act:
-            best_act, best_mid = js["last_activity"], mid
+            best_act, best_mid, best_entry = js["last_activity"], mid, entry
+        # Live rates with no card they can be charged to: say so instead of guessing.
+        if gpu_idx is None and info.get("state") == "ready" and (gen > 0 or pp > 0):
+            unattributed.append({"model": mid, "gen": gen, "pp": pp})
         # Only ready models publish per-GPU realtime: a starting/stopping model
         # would otherwise replay its last generation as a live speed during reload.
         if gpu_idx is not None and info.get("state") == "ready":
-            cur = by_gpu.get(gpu_idx)
-            if cur is None or js["last_activity"] >= cur.get("_act", 0):
-                entry["_act"] = js["last_activity"]
+            if gpu_idx not in by_gpu or js["last_activity"] >= by_gpu_act.get(gpu_idx, 0):
+                by_gpu_act[gpu_idx] = js["last_activity"]
                 by_gpu[gpu_idx] = entry
         if gpu_idx is not None:
             pending.append((gpu_idx, mid, js))
-    for e in by_gpu.values():
-        e.pop("_act", None)
 
-    top = by_gpu.get(0) or {}
-    if best_mid is not None:
-        info = running.get(best_mid, {})
-        gidx = _model_gpu(info.get("port"), info.get("description"))
-        top = by_gpu.get(gidx) or top
+    # Headline is the busiest ready model's own numbers, whatever card it runs on.
+    top = best_entry if best_entry is not None else (by_gpu.get(0) or {})
     realtime = {k: v for k, v in top.items() if k != "model"}
     last_act = max([js["last_activity"] for js in streams.values()] or [0])
 
@@ -1111,6 +1313,7 @@ def merge_perf():
         perf["mtp"] = top.get("mtp", 0.0)
         perf["mtp_valid"] = top.get("mtp_valid", False)
         perf["model"] = best_mid
+        perf["unattributed"] = unattributed
         perf["last_activity"] = max(last_act, perf.get("last_gpu_busy", 0))
         perf["realtime"] = realtime
         perf["realtime_by_gpu"] = by_gpu
@@ -1237,6 +1440,7 @@ def build_stats():
     with _lock:
         gpus = gpu.get("gpus", [])
         rt = perf.get("realtime_by_gpu", {})
+        unatt = [dict(e) for e in perf.get("unattributed", [])]
         out = []
         for gi, g in enumerate(gpus):
             idx = gi
@@ -1261,7 +1465,7 @@ def build_stats():
                 "hot_mu": round(sum(s["hot"]) / len(s["hot"]), 1) if s and s["hot"] else 0.0,
                 "pwr_mu": round(sum(s["pwr"]) / len(s["pwr"]), 1) if s and s["pwr"] else 0.0,
             })
-        return {"updated_at": now, "gpus": out}
+        return {"updated_at": now, "gpus": out, "unattributed": unatt}
 
 # ====================== MCP ======================
 mcp_server = MCPServer(name="llama-metrics", title="llama-metrics",
@@ -1345,7 +1549,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({
                     "running": {mid: {k: v for k, v in info.items() if k != "cmd"}
                                for mid, info in _running.items()},
-                    "backends": {str(p): {"gpu": b.get("gpu"), "pid": b.get("pid")}
+                    "backends": {str(p): {"gpu": b.get("gpu"), "via": b.get("via"), "pid": b.get("pid")}
                                  for p, b in _backends.items()},
                     "models": {mid: {
                         "gpu": _model_gpu(e["port"], _running.get(mid, {}).get("description", "")),
