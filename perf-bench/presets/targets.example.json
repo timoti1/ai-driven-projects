@@ -1,5 +1,7 @@
 {
  "local": {"host": "127.0.0.1", "port": 8080, "model": "put-model-id-here"},
  "lan-swap": {"host": "put-host-or-ip-here", "port": 8080, "model": "put-model-id-here", "api_key_env": "PERF_BENCH_KEY"},
- "ollama": {"host": "127.0.0.1", "port": 11434, "model": "put-model-id-here"}
+ "ollama": {"host": "127.0.0.1", "port": 11434, "model": "put-model-id-here"},
+ "openrouter": {"host": "openrouter.ai", "port": 443, "scheme": "https", "path_prefix": "/api", "model": "put-openrouter-model-id-here", "api_key_env": "OPENROUTER_API_KEY"},
+ "openai": {"host": "api.openai.com", "port": 443, "scheme": "https", "model": "put-openai-model-id-here", "api_key_env": "OPENAI_API_KEY"}
 }
