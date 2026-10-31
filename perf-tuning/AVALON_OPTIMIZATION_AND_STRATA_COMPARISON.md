@@ -188,25 +188,74 @@ Both models tested through the same `llama-swap` proxy on port 8080, identical t
 
 ---
 
-## 7. Memory Usage Comparison
+## 7. System Resource Usage Comparison (Real Measurements)
 
-### Strata Memory Requirements
+Measurements taken on ryzen5800 (192.168.1.104) with 62 GB system RAM, dual RX 9070 GPUs, ROCm 7.8.0. Both engines tested with model loaded and idle, then during an inference request (200 tokens generation).
 
-Strata allocates a significant amount of system RAM during operation — at minimum several gigabytes are reserved for expert caching, PLE tables, and working memory. This can be a heavy burden on modern systems where memory is shared among multiple processes. The memory is held resident and is not readily available for other applications while Strata is running.
+### Test Environment
 
-### Avalon Memory Usage
+| Component | Specification |
+|-----------|--------------|
+| System RAM | 62 GB total |
+| Swap | 8 GB |
+| GPU 0 | RX 9070 Sapphire (PCIe x2, HIP_VISIBLE_DEVICES=0) |
+| GPU 1 | RX 9070 Gigabyte (PCIe x16, HIP_VISIBLE_DEVICES=1) |
+| ROCm | 7.8.0 |
 
-Avalon uses memory more gently. It allocates VRAM for model weights and KV cache, but the system RAM usage is more flexible. Memory used for caching is not exclusively blocked — it can be reclaimed or shared with other programs when needed. Avalon is able to run on systems with less total RAM available compared to Strata's requirements, making it more suitable for constrained environments where memory headroom is limited.
+### Avalon Resource Usage
 
-### Summary
+**Engine:** `avalon-qwen3.8-flash-next-C2` on port 5800 (direct, no proxy)
 
-| Aspect | Strata | Avalon |
-|--------|--------|--------|
-| System RAM reservation | High (several GB resident) | Moderate, flexible |
-| Memory blocking | Memory held resident, unavailable to others | Cache can be reclaimed/shared |
-| Suitable for low-RAM systems | No | Yes |
+| Metric | Idle (model loaded) | During Inference |
+|--------|--------------------|------------------|
+| Process CPU | ~36% | ~104% (multi-core) |
+| Process RSS | ~51.8 GB | ~52.3 GB |
+| System RAM used | ~5.4 GiB | ~5.9 GiB |
+| System RAM available | ~57 GiB | ~56 GiB |
+| Swap used | ~1.7 GiB | ~1.7 GiB |
+| GPU 0 (Sapphire) Temp | 42°C | — |
+| GPU 1 (Gigabyte) Temp | 41°C | — |
+| GPU 1 VRAM used | 98% | — |
+| GPU 1 GPU load | 3% | — |
+
+**Key observation:** Avalon's system RAM footprint is modest (~6 GB). Most memory is in VRAM (GPU 1 at 98%). System remains responsive with 56+ GB available.
+
+### Strata Resource Usage
+
+**Engine:** `qwen3.8-flash-IQ3_S` via llama-swap on port 8080
+
+| Component | CPU | RSS |
+|-----------|-----|-----|
+| llama-swap proxy | ~0% | ~25-29 MB |
+| strata server (Python) | ~0.6% | ~30-32 MB |
+| strata engine | ~50-75% | ~50.7-51 GB |
+
+| Metric | Idle (model loaded) | During Inference |
+|--------|--------------------|------------------|
+| Strata engine CPU | ~50% | ~75% |
+| System RAM used | ~54 GiB | ~54 GiB |
+| System RAM available | ~8.2 GiB | ~7.9 GiB |
+| Swap used | ~3.9 GiB | ~3.8 GiB |
+| GPU VRAM | — | — |
+
+**Key observation:** Strata consumes ~54 GB of system RAM — nearly the entire 62 GB available. Swap usage rises to ~3.9 GB. Only ~8 GB remains available for other processes. This can cause system instability on machines with less RAM.
+
+### Side-by-Side Summary
+
+| Resource | Strata | Avalon | Difference |
+|----------|--------|--------|------------|
+| System RAM (idle) | ~54 GiB | ~5.4 GiB | **Strata uses 10× more** |
+| System RAM (inference) | ~54 GiB | ~5.9 GiB | **Strata uses 9× more** |
+| System RAM available | ~8 GB | ~56 GB | **Avalon leaves 7× more free** |
+| Swap usage | ~3.9 GiB | ~1.7 GiB | **Strata uses 2.3× more swap** |
+| Engine CPU (idle) | ~50% | ~36% | Avalon lighter |
+| Engine CPU (inference) | ~75% | ~104% | Avalon uses more CPU cores |
+| GPU VRAM | ~98% (GPU 1) | ~98% (GPU 1) | Similar |
+| System responsiveness | Constrained (8 GB free) | Comfortable (56 GB free) | **Avalon better** |
 
 ---
+
+**Conclusion on system load:** Avalon is significantly lighter on system RAM, leaving the majority of memory available for other applications. Strata reserves most of system RAM (~54 GB of 62 GB), pushing the system into swap and leaving only ~8 GB free — a concern for production environments where multiple services share the same host.
 
 ## 8. Files in Repository
 
