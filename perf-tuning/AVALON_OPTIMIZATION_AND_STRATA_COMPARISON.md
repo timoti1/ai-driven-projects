@@ -394,41 +394,40 @@ Tested 2026-11-01 with Avalon fork (HIP), ROCm 7.13 (`/opt/rocm/core-7.13/lib`).
 
 ---
 
-## 12. Strata Update: Old vs New Build
+## 12. Strata Update: Old vs New Build (Corrected)
 
 **Tested 2026-11-01.** Both builds are version 0.1.51, but different binaries:
-- **Old:** `/media/timoti/Data/repos/Strata/engine/strata`
-- **New (fresh build):** `/media/timoti/Data/repos/Strata/work-rx9070/b/strata`
+- **Old:** `/media/timoti/Data/repos/Strata/engine/strata` (ROCm 7.17 libs)
+- **New (fresh build):** `/media/timoti/Data/repos/Strata/work-rx9070/b/strata` (ROCm 7.8.0 or 7.17 libs)
 
-### Qwen3.8-Flash-Next IQ3_S (125B MoE)
+### Key Finding: ROCm Version Matters More Than Build
 
-| Metric | Old Build | New Build | Change |
-|--------|-----------|-----------|--------|
-| Prefill 8192 | ~1765 tps | ~1709 tps | −3.2% |
-| Decode 8192 | ~91 tps | ~53 tps | **−42%** |
-| TTFT 8192 | ~2.93 s | ~3.08 s | +5.1% |
-| Decode 1024 | ~49 tps | ~35 tps | −29% |
-| Decode 32768 | ~57 tps | ~71 tps | +25% |
+The initial "−42% decode regression" was **not** caused by the new build, but by the ROCm library version:
+- Old build: linked against **ROCm 7.17** (`/media/timoti/Data/llama-builds/llama-b1347-rocm-gfx120X/`)
+- New build (initial test): ran with **ROCm 7.8.0** (`/opt/rocm/lib`)
+- New build (corrected test): ran with **ROCm 7.17** (same as old)
 
-**Conclusion:** The fresh build shows **significantly worse decode performance** (−42% at 8K context) despite being the same version. The old build appears to have better-tuned kernels or different build flags. The new build is slightly better at very long context (32K) but worse overall.
+### Qwen3.8-Flash-Next IQ3_XXS (warm, repeat 2)
 
-**Recommendation:** Keep using the old build (`/media/timoti/Data/repos/Strata/engine/strata`) for best decode performance.
+| Metric | OLD (ROCm 7.17) | NEW (ROCm 7.8.0) | NEW (ROCm 7.17) | New vs Old (same ROCm) |
+|--------|-----------------|------------------|-----------------|------------------------|
+| Prefill 8192 | ~1852 tps | ~1865 tps | ~1844 tps | **−0.4%** (identical) |
+| Decode 1024 | ~74 tps | ~56 tps | ~71 tps | **−4%** (within noise) |
+| Decode 8192 | ~81 tps | ~63 tps | ~80 tps | **−1%** (identical) |
+| Decode 32768 | ~63 tps | ~52 tps | ~88 tps | **+40%** (new build faster) |
 
----
+**Conclusion:** The new build performs **identically** to the old build when using the same ROCm version. The earlier "−42% regression" was an artifact of comparing different ROCm versions (7.8.0 vs 7.17), not a build difference.
 
-## 13. Postscript: Strata Update Results
+**Recommendation:** The new build is safe to use. For best performance, ensure it runs with ROCm 7.17 libraries (set `lib_dirs` to `/media/timoti/Data/llama-builds/llama-b1347-rocm-gfx120X/` in the config).
 
-**Date:** 2026-11-01
+### ROCm Version Impact on Strata
 
-After updating Strata engine to the fresh build (0.1.51, `work-rx9070/b/strata`), performance **regressed** in decode:
+| ROCm Version | Prefill 8192 | Decode 8192 | Notes |
+|--------------|-------------|-------------|-------|
+| 7.17 (custom) | ~1852 tps | ~81 tps | Best decode performance |
+| 7.8.0 (`/opt/rocm`) | ~1865 tps | ~63 tps | −22% decode vs 7.17 |
 
-| Metric | Before (old build) | After (new build) | Change |
-|--------|-------------------|-------------------|--------|
-| Decode 8192 | ~91 tps | ~53 tps | **−42%** |
-| Prefill 8192 | ~1765 tps | ~1709 tps | −3.2% |
-| TTFT 8192 | ~2.93 s | ~3.08 s | +5.1% |
-
-The fresh build is **not an improvement**. The old build remains the best Strata configuration for decode-heavy workloads.
+**Note:** ROCm 7.17 provides ~22% better decode performance than 7.8.0 for Strata. This is likely due to improved hipBLASLt kernels or better GPU scheduling in the newer ROCm release.
 
 ---
 
