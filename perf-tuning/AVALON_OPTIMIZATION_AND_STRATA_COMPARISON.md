@@ -20,6 +20,9 @@
 | VRAM per GPU | 16 GB |
 | System RAM | 62 GB (+8 GB swap) |
 | OS | Linux (Ubuntu 24.04-based) |
+| GPU Power Limit | **210 W (undervolted/underclocked)** — below factory specification |
+
+**Important caveat:** Both RX 9070 GPUs are power-limited to 210 W, which is below their factory TGP. The same cards running at full power could show better results. All performance numbers below are measured with this 210 W limit in effect.
 
 ### GPU Mapping (HIP_VISIBLE_DEVICES)
 
@@ -82,14 +85,14 @@ Find optimal command-line parameters for model `avalon-qwen3.8-flash-next-C2`
 | batch 4096, draft 2 | 2 | 4096 | 2 | ~889 tps | ~60 tps | ~10.8 s |
 | batch 4096, draft 3 (dual) | 2 | 4096 | 3 | ~941 tps | ~63 tps | ~5.8 s |
 | batch 4096, draft 3 (single, live-tested) | 1 | 4096 | 3 | ~984 tps | ~75 tps | ~5.5 s |
-| Via llama-swap proxy | 2 | 4096 | 3 | — | ~15 tps | — |
+| Via llama-swap proxy (live-tested 2026-10-31) | 1 | 4096 | 3 | ~931–954 tps | ~56–64 tps | ~5.8–6.1 s |
 
-**Key optimization findings:**
+**Key optimization findings (verified by live testing):**
 
 - `--parallel 1` gives **higher decode throughput** (~75 tps vs ~63 tps at parallel=2) with similar TTFT (~5.5 s vs ~5.8 s)
 - batch 4096 gives **+89% prefill** compared to batch 2048
 - draft 3 gives **+10-20% decode throughput** compared to draft 2
-- llama-swap adds **~3-4x overhead** — direct connection to the engine port is preferred for maximum performance
+- llama-swap proxy adds **moderate overhead** (~20% slower decode, ~3–5% slower prefill) — **NOT 3-4x** as previously claimed. Direct connection to engine port (5800) is still preferred for maximum performance.
 
 ---
 
@@ -181,10 +184,56 @@ Both models tested through the same `llama-swap` proxy on port 8080, identical t
 - **Strata** uses native IQ packs (separate `.bin` experts + GGUF shards), model on Gigabyte GPU (PCIe x16)
 - Model formats are incompatible — direct same-model comparison is impossible, models are logically equivalent (Qwen3.8-Flash-Next) but physically different
 
-### Proxy Overhead
+### llama-swap Proxy — Live Test Results
 
-- llama-swap adds **~3-4x overhead** compared to direct engine connection
-- For maximum performance, direct connection to engine port (5800 for Avalon) is recommended
+**Tested 2026-10-31:** Direct engine (port 5800) vs via llama-swap proxy (port 8080), same model, same parameters.
+
+| Metric | Direct (5800) | Via llama-swap (8080) | Overhead |
+|--------|--------------|----------------------|----------|
+| Prefill 8192 | ~984 tps | ~931–954 tps | ~3–5% slower |
+| Decode 8192 | ~71–80 tps | ~56–64 tps | ~20% slower |
+| TTFT 8192 | ~5.5–5.6 s | ~5.8–6.1 s | ~10% slower |
+| Decode 1024 | ~71–76 tps | ~63–67 tps | ~12% slower |
+| Decode 32768 | ~73–80 tps | ~58–65 tps | ~20% slower |
+
+**Conclusion:** llama-swap adds **moderate overhead** (~20% decode, ~3–5% prefill). The previously claimed "3-4x overhead" was **not confirmed** by live testing and appears to have been from a different/test-faulty run. Direct engine connection is still preferred for maximum performance, but llama-swap overhead is not prohibitive.
+
+### Why llama-swap Adds Overhead — Potential Explanations
+
+The ~20% decode overhead and ~3–5% prefill overhead when going through llama-swap (port 8080) vs direct engine connection (port 5800) can be explained by several factors:
+
+1. **HTTP proxy layer:** Every request passes through an additional HTTP stack (localhost TCP/IP, request parsing, response serialization). This adds latency per request, which is more noticeable for short decode requests where GPU compute time is small.
+
+2. **JSON serialization/deserialization:** Requests and responses must be serialized to/from JSON. For large prompts (8192+ tokens), this adds CPU overhead on both the proxy and engine sides.
+
+3. **Inter-process data copying:** The request travels from client → llama-swap process → llama-server process, and the response travels back. Each hop involves memory copying and context switching between processes.
+
+4. **Request routing and validation:** llama-swap must look up the model in its config, validate the request, check capabilities, and forward to the correct backend. This adds a small fixed cost per request.
+
+5. **Logging and metrics:** llama-swap logs every request and response, which involves disk I/O and CPU cycles that are bypassed in direct connection.
+
+6. **Streaming overhead:** For streaming responses (token-by-token), each token must be wrapped in an HTTP chunked response and passed through the proxy, adding per-token overhead.
+
+**Why prefill has less overhead (~3–5%):** Prefill is GPU-bound (large matrix operations). The fixed proxy overhead is amortized over the longer GPU compute time, making it proportionally smaller.
+
+**Why decode has more overhead (~20%):** Decode is more latency-sensitive with many small per-token operations. The fixed proxy overhead per request/token represents a larger fraction of total time.
+
+---
+
+### Parallel Sessions Test (Live Results)
+
+**Tested 2026-10-31:** Single session vs two concurrent sessions on Avalon parallel=2 engine (port 5800). Two simultaneous requests with 8192-token prompt, 128 max tokens each.
+
+| Metric | Single Session | Two Parallel (combined) | Ratio |
+|--------|---------------|------------------------|-------|
+| Decode (single) | ~59–62 tps | — | — |
+| Decode (two parallel) | — | ~43–45 tps (combined) | **0.70–0.76x** |
+| Prompt (single) | ~659–854 tps | — | — |
+| Prompt (two parallel) | — | ~661–694 tps (combined) | **0.81–1.00x** |
+| Wall clock (single) | ~4.2–5.0 s | — | — |
+| Wall clock (two parallel) | — | ~5.4 s | — |
+
+**Key finding:** Running two parallel sessions does **NOT** increase combined decode throughput. In fact, combined decode drops to ~70–76% of single-session throughput. Prompt processing is roughly unchanged (~1.0x). **Conclusion: parallel=1 is better for maximum throughput; parallel=2 does not improve combined performance.**
 
 ---
 
