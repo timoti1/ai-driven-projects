@@ -21,3 +21,7 @@ Thumbs.db
 # Local scratch
 *.log
 frames/
+
+# Test results
+perf-tuning/results/
+perf-bench/results/runs.csv
