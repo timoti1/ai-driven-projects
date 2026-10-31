@@ -188,7 +188,27 @@ Both models tested through the same `llama-swap` proxy on port 8080, identical t
 
 ---
 
-## 7. Files in Repository
+## 7. Memory Usage Comparison
+
+### Strata Memory Requirements
+
+Strata allocates a significant amount of system RAM during operation — at minimum several gigabytes are reserved for expert caching, PLE tables, and working memory. This can be a heavy burden on modern systems where memory is shared among multiple processes. The memory is held resident and is not readily available for other applications while Strata is running.
+
+### Avalon Memory Usage
+
+Avalon uses memory more gently. It allocates VRAM for model weights and KV cache, but the system RAM usage is more flexible. Memory used for caching is not exclusively blocked — it can be reclaimed or shared with other programs when needed. Avalon is able to run on systems with less total RAM available compared to Strata's requirements, making it more suitable for constrained environments where memory headroom is limited.
+
+### Summary
+
+| Aspect | Strata | Avalon |
+|--------|--------|--------|
+| System RAM reservation | High (several GB resident) | Moderate, flexible |
+| Memory blocking | Memory held resident, unavailable to others | Cache can be reclaimed/shared |
+| Suitable for low-RAM systems | No | Yes |
+
+---
+
+## 8. Files in Repository
 
 | File | Description |
 |------|-------------|
@@ -203,7 +223,7 @@ Both models tested through the same `llama-swap` proxy on port 8080, identical t
 
 ---
 
-## 8. How to Reproduce
+## 9. How to Reproduce
 
 ### Avalon Direct (port 5800)
 
@@ -233,7 +253,7 @@ python3 bench.py --host 127.0.0.1 --port 8080 --model qwen3.8-flash-IQ3_S \
 
 ---
 
-## 9. Future Testing
+## 10. Future Testing
 
 | Test | Priority | Notes |
 |------|----------|-------|
