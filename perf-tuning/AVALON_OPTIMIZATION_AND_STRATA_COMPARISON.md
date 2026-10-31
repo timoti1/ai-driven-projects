@@ -351,12 +351,93 @@ python3 bench.py --host 127.0.0.1 --port 8080 --model qwen3.8-flash-IQ3_S \
 
 ---
 
-## 10. Future Testing
+## 10. ROCm 7.13 Results
+
+Tested 2026-11-01 with Avalon fork (HIP), ROCm 7.13 (`/opt/rocm/core-7.13/lib`).
+
+| Metric | ROCm 7.8.0 | ROCm 7.13 | Change |
+|--------|-----------|-----------|--------|
+| Prefill 8192 | ~998 tps | ~1012 tps | +1.4% |
+| Decode 8192 | ~81 tps | ~66 tps | -18.5% |
+| TTFT 8192 | ~5.5 s | ~18.3 s | +233% |
+| Decode 32768 TTFT | — | ~83.5 s | — |
+
+**Conclusion:** ROCm 7.13 shows marginal prefill improvement but significantly worse decode performance and TTFT. Not recommended for Avalon.
+
+---
+
+## 11. rdna-boosts (AMD RDNA4-Optimized Fork)
+
+**Source:** `stew675/llama-cpp-rdna-boosts` (commit 561696677, 0.7.0-dev)
+**Binary:** `/home/timoti/Downloads/llama.cpp/build/bin/llama-server`
+**Backend:** HIP/ROCm 7.8.0, RDNA4 (gfx1201) optimizations
+
+### Compatibility
+
+- **Cannot load Avalon fork model** (33-shard custom MoE format, invalid ggml type 43)
+- **Cannot load 125B MoE abliterated model** (exceeds 16 GB VRAM)
+- **Works with standard GGUF models** (e.g., Spark-X2.6-4B, 4B params)
+
+### Spark-X2.6-4B Benchmark (4B model, fits in 16 GB VRAM)
+
+| Engine | Backend | Prefill 8192 | Decode 8192 | TTFT 8192 | Notes |
+|--------|---------|-------------|-------------|-----------|-------|
+| rdna-boosts | HIP (ROCm 7.8.0) | ~5436 tps | ~129 tps | ~0.95 s | RDNA4-optimized fork |
+| llama-latest | Vulkan (RADV) | ~3925 tps | ~146 tps | ~1.28 s | Stock Vulkan backend |
+| rocm-llama | HIP (ROCm 7.8.0) | ~6051 tps | ~117 tps | ~0.90 s | Stock ROCm fork |
+
+**Findings:**
+- rdna-boosts prefill is **+38%** faster than Vulkan, but **−10%** slower than stock ROCm
+- rdna-boosts decode is **+10%** faster than stock ROCm, but **−12%** slower than Vulkan
+- For small models (4B), stock ROCm and Vulkan are competitive; rdna-boosts advantage is not clear-cut
+- rdna-boosts requires same K and V cache types (unlike Avalon which allows q8_0/q4_0 mix)
+
+---
+
+## 12. Strata Update: Old vs New Build
+
+**Tested 2026-11-01.** Both builds are version 0.1.51, but different binaries:
+- **Old:** `/media/timoti/Data/repos/Strata/engine/strata`
+- **New (fresh build):** `/media/timoti/Data/repos/Strata/work-rx9070/b/strata`
+
+### Qwen3.8-Flash-Next IQ3_S (125B MoE)
+
+| Metric | Old Build | New Build | Change |
+|--------|-----------|-----------|--------|
+| Prefill 8192 | ~1765 tps | ~1709 tps | −3.2% |
+| Decode 8192 | ~91 tps | ~53 tps | **−42%** |
+| TTFT 8192 | ~2.93 s | ~3.08 s | +5.1% |
+| Decode 1024 | ~49 tps | ~35 tps | −29% |
+| Decode 32768 | ~57 tps | ~71 tps | +25% |
+
+**Conclusion:** The fresh build shows **significantly worse decode performance** (−42% at 8K context) despite being the same version. The old build appears to have better-tuned kernels or different build flags. The new build is slightly better at very long context (32K) but worse overall.
+
+**Recommendation:** Keep using the old build (`/media/timoti/Data/repos/Strata/engine/strata`) for best decode performance.
+
+---
+
+## 13. Postscript: Strata Update Results
+
+**Date:** 2026-11-01
+
+After updating Strata engine to the fresh build (0.1.51, `work-rx9070/b/strata`), performance **regressed** in decode:
+
+| Metric | Before (old build) | After (new build) | Change |
+|--------|-------------------|-------------------|--------|
+| Decode 8192 | ~91 tps | ~53 tps | **−42%** |
+| Prefill 8192 | ~1765 tps | ~1709 tps | −3.2% |
+| TTFT 8192 | ~2.93 s | ~3.08 s | +5.1% |
+
+The fresh build is **not an improvement**. The old build remains the best Strata configuration for decode-heavy workloads.
+
+---
+
+## 14. Future Testing
 
 | Test | Priority | Notes |
 |------|----------|-------|
-| ROCm 7.13 vs 7.8.0 | Medium | Switch `LD_LIBRARY_PATH` to `/opt/rocm/core-7.13/lib` |
 | ROCm 7.2.4 vs 7.8.0 | Medium | Switch `LD_LIBRARY_PATH` to `/home/timoti/rocm724-portable/lib` |
 | Model on Sapphire GPU (PCIe x2) | Low | `HIP_VISIBLE_DEVICES=0`, port 5900 |
 | Sweep `--spec-draft-n-max` 2/3/4 | Medium | For Avalon |
 | Direct Strata connection (no llama-swap) | Medium | Requires HTTP server in Strata binary |
+| rdna-boosts with larger model | Low | Need model that fits in 16 GB VRAM (e.g., 7-14B) |
