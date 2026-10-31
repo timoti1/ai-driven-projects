@@ -132,12 +132,18 @@ avalon-qwen3.8-flash-next-C2:
 
 | Test | Depth | prefill_tps | decode_tps | first_token_s |
 |------|-------|-------------|------------|---------------|
-| prefill | 383 | ~173–265 | — | — |
-| prefill | 1382 | — | ~722–740 | — |
-| prefill | 5380 | — | ~992–1005 | — |
-| decode | 1024 | — | ~72–75 | ~2.5–2.6 s |
-| decode | 8192 | — | ~79–84 | ~5.5–5.8 s |
-| decode | 32768 | — | ~85–86 | ~19.5 s |
+| prefill | 382 | 158.0 | — | — |
+| prefill | 1381 | — | 689.2 | — |
+| prefill | 5380 | — | 978.7 | — |
+| prefill | 382 | 254.5 | — | — |
+| prefill | 1381 | — | 580.3 | — |
+| prefill | 5380 | — | 989.5 | — |
+| decode | 1024 | — | 51.1 | 2.49 s |
+| decode | 8192 | — | 69.2 | 5.48 s |
+| decode | 32768 | — | 68.9 | 19.47 s |
+| decode | 1024 | — | 67.2 | 2.52 s |
+| decode | 8192 | — | 81.0 | 5.49 s |
+| decode | 32768 | — | 78.0 | 19.50 s |
 
 ### Avalon HIP, --parallel 2 (dual-thread), batch 4096, draft 3
 
@@ -174,7 +180,7 @@ avalon-qwen3.8-flash-next-C2:
 
 ### ✅ Completed
 
-- **Avalon HIP with --parallel 1** (single-thread): ~81 tps decode @ 8K, ~998 tps prefill @ 8K, TTFT ~5.5 s
+- **Avalon HIP with --parallel 1** (single-thread, live-tested 2026-10-31): ~75 tps decode @ 8K (range 69-81), ~984 tps prefill @ 8K (range 979-990), TTFT ~5.5 s
 - **Avalon HIP with --parallel 2** (dual-thread): ~63 tps decode @ 8K, ~941 tps prefill @ 8K, TTFT ~5.8 s
 - **Avalon HIP with --spec-draft-n-max 3** (draft 3): best config, better than draft 2
 
@@ -182,14 +188,15 @@ avalon-qwen3.8-flash-next-C2:
 
 | Engine | Blocker |
 |--------|---------|
-| **llama-latest (Vulkan 0.24.0)** | Avalon GGUF uses custom MoE tensor names (`blk.0.ffn_down_exps.weight`) incompatible with standard llama.cpp 0.24.0. No Qwen3.8-27B GGUF files available (only `config.json` in `/media/timoti/Data/lmstudio/models/unsloth/Qwen3.8-27B-GGUF/`). Cannot test with target Qwen3.8-Flash-Next 125B MoE model. |
+| **llama-latest (Vulkan 0.4.1-dev)** | Avalon GGUF uses custom MoE tensor names (`blk.0.ffn_down_exps.weight`) incompatible with standard llama.cpp. No Qwen3.8-27B GGUF files available. Cannot test with target Qwen3.8-Flash-Next 125B MoE model. |
 | **rocmfpx-runtime (Vulkan)** | Same model incompatibility — based on llama.cpp, cannot load Avalon GGUF. |
-| **Strata engine** | CLI-only tool (`strata generate`), not an HTTP server — cannot benchmark via perf-bench API probes. Missing `libhipblas.so.3.4` (system has 7.8.0 with `libhipblas.so.3.7`). Model paths in old config are invalid. |
+| **Strata engine** | `per_layer_token_embd.weight` missing from Strata model shards — engine cannot launch with `--native`. Binary lacks `--serve` HTTP mode. Needs `libhipblas.so.3.4` (ROCm 7.13). Direct side-by-side test impossible — no shared model format. |
 
 ### ⬜ Not yet tested
 
 | Test | Priority |
 |------|----------|
+| Direct side-by-side test (Avalon vs Strata) | High — **IMPOSSIBLE**: no shared model format, Avalon uses 33-shard GGUF, Strata uses native IQ packs |
 | Different ROCm versions (7.13, 7.2.4 vs 7.8.0) | Medium |
 | Model on Sapphire GPU (PCIe x2, slower bus) | Low |
 | --spec-draft-n-max 2 vs 3 vs 4 sweep | Medium |

@@ -256,17 +256,40 @@ python3 bench.py --host 192.168.1.104 --port 8080 --model avalon-qwen3.8-flash-n
 |--------|----------|-------|-------|-------------|-------------|-----------|
 | Original (batch 2048, draft 2) | 2 | 2048 | 2 | ~497 tps | ~46 tps | ~10.8 s |
 | batch 4096, draft 2 | 2 | 4096 | 2 | ~889 tps | ~60 tps | ~10.8 s |
-| batch 4096, draft 3 (BEST) | 2 | 4096 | 3 | ~938 tps | ~72 tps | ~5.8 s |
-| batch 4096, draft 3 (single) | 1 | 4096 | 3 | ~998 tps | ~81 tps | ~5.5 s |
+| batch 4096, draft 3 (BEST, dual) | 2 | 4096 | 3 | ~941 tps | ~63 tps | ~5.8 s |
+| batch 4096, draft 3 (single, live-tested 2026-10-31) | 1 | 4096 | 3 | ~984 tps | ~75 tps | ~5.5 s |
 | Via llama-swap proxy | 2 | 4096 | 3 | — | ~15 tps | — |
 
 ---
 
-## 6. Strata Engine Comparison
+## 6. Strata Engine Comparison — LIVE TEST BLOCKED
 
-### Strata Bench Configuration
+### Attempted Live Test
 
-From `/home/timoti/rocm-bench/bench-rocm724.json`:
+We attempted to launch Strata as an HTTP server via `serve/server.py` on port 8095 with:
+
+- **Pack:** `/media/timoti/Data/Strata-data/packs/swift-iq3_s` (native IQ pack)
+- **Native model:** `/media/timoti/Data/Strata-data/models/swift-IQ3_S/Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf`
+- **PLE shard:** `/media/timoti/Data/Strata-data/models/swift-IQ3_S/Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf`
+- **MTP:** `/media/timoti/Data/Strata-data/mtp/rt`
+- **Backend:** HIP / ROCm 7.8.0 on Gigabyte RX 9070 (HIP_VISIBLE_DEVICES=1)
+
+### Blocker: Missing `per_layer_token_embd.weight` Tensor
+
+Strata's engine requires the `per_layer_token_embd.weight` tensor for its PLE (Per-Layer Embedding) layer when running with `--native` (required for native IQ packs). The error is:
+
+```
+strata generate: --native requires --ple-gguf (the PLE key is native too), and no
+shard of the model holds per_layer_token_embd.weight
+```
+
+This is a **fundamental incompatibility** — neither shard of the Swift-Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S model contains this tensor. The `--no-ple` flag does NOT help because for `--native` packs, `--ple-gguf` is mandatory regardless of `--no-ple` (see `src/program/generate.cpp` lines 3254-3265).
+
+### Other Blockers
+
+1. **No HTTP server mode in binary:** The `strata` binary supports `generate` mode (CLI, `--tokens`) but not a resident `--serve` mode with stdin/stdout protocol. The `serve/server.py` wrapper expects `--serve` to work, but the binary ignores it and runs as `generate`.
+2. **Missing `libhipblas.so.3`:** System has ROCm 7.8.0 with `libhipblas.so.3.7`, but Strata needs `libhipblas.so.3.4` (from ROCm 7.13).
+3. **Invalid model paths:** Old config references `/media/timoti/Data/lmstudio/models/IQ3_S/` which is empty.
 
 ```json
 {
@@ -295,7 +318,11 @@ From `/home/timoti/rocm-bench/bench-rocm724.json`:
 }
 ```
 
-### Strata Optimization Results (from STRATA_OPTIMIZATION.md)
+### Historical Data Only (NOT Live-Tested)
+
+The following Strata numbers are from `STRATA_OPTIMIZATION.md` (22 October) — **NOT live-tested**, not from this hardware/software stack:
+
+| Configuration | tok/s | Acceptance | Notes |
 
 | Configuration | tok/s | Acceptance | Notes |
 |---------------|-------|------------|-------|
@@ -315,9 +342,9 @@ From `/home/timoti/rocm-bench/bench-rocm724.json`:
 
 **Final Strata config:** `--kv-resident 20480 --mtp-hnorm stream` → **63.8 tok/s** *(historical data from STRATA_OPTIMIZATION.md, not live-tested)*
 
-### Long-context Strata (IQ3_S, decode tok/s)
+### Long-context Strata (IQ3_S, decode tok/s) — Historical Only
 
-*Source: `STRATA_OPTIMIZATION.md` (22 October) — NOT live measurements, historical data only.*
+*Source: `STRATA_OPTIMIZATION.md` (22 October) — NOT live measurements.
 
 | Context | Baseline | kv-res 20480 | kv-res 32768 |
 |---------|----------|--------------|--------------|
@@ -328,23 +355,54 @@ From `/home/timoti/rocm-bench/bench-rocm724.json`:
 
 ---
 
-## 7. Comparison: Avalon (Best) vs Strata
+## 7. Comparison: Avalon vs Strata — Same Test Impossible
 
 | Metric | Avalon (parallel 1) | Avalon (parallel 2) | Strata (best) |
 |--------|---------------------|---------------------|---------------|
 | Engine | Avalon HIP 0.26.0 | Avalon HIP 0.26.0 | Strata v0.1.47 |
 | Backend | HIP / ROCm 7.8.0 | HIP / ROCm 7.8.0 | HIP / ROCm 7.13 |
-| Model | Qwen3.8-Flash-Next 125B MoE | Qwen3.8-Flash-Next 125B MoE | Qwen3.8-Flash-Next IQ3_S |
+| Model | Qwen3.8-Flash-Next 125B MoE | Qwen3.8-Flash-Next 125B MoE | Qwen3.8-Flash-Next IQ3_S *(different model)* |
 | Quantization | IQ3_K (33 shards) | IQ3_K (33 shards) | IQ3_S |
 | Context | 200K | 200K | 128K |
 | Batch | 4096 | 4096 | auto |
 | Draft | MTP n=3 | MTP n=3 | spec=4 |
-| Prefill 8192 | ~998 tps | ~941 tps | — |
-| Decode 8192 | **~81 tps** | ~63 tps | ~64-75 tok/s *(historical, not live-tested)* |
+| Prefill 8192 | ~984 tps | ~941 tps | — |
+| Decode 8192 | **~75 tps** | ~63 tps | ~64-75 tok/s *(historical, not live-tested)* |
 | TTFT 8192 | ~5.5 s | ~5.8 s | — |
 | VRAM used | ~16.9 GB (full) | ~16.9 GB (full) | ~10 GB free |
 
-**Winner: Avalon (single-thread)** — ~81 tps decode at 8K context, ~998 tps prefill at 8K context. Strata achieves ~64-75 tok/s but with lower VRAM usage (~10 GB free vs full 16 GB).
+### Why a Direct Side-by-Side Test Is Not Possible
+
+A fair comparison requires running the **same test** (same prompt, same tokens, same parameters) on both engines. This is **impossible** because:
+
+1. **Strata cannot load the Avalon model:** The Avalon Qwen3.8-Flash-Next 125B MoE GGUF uses custom MoE tensor names (`blk.0.ffn_down_exps.weight`) incompatible with Strata's native pack format.
+2. **Strata cannot run its own model as HTTP server:** The `per_layer_token_embd.weight` tensor is missing from the Strata model shards, making the engine unlaunchable.
+3. **No shared model format:** Avalon uses 33-shard GGUF (llama.cpp format); Strata uses native IQ packs (`.bin` experts + separate GGUF shards). These are fundamentally different formats.
+
+### Avalon Results (Live-Tested)
+
+| Metric | Avalon (parallel 1) | Avalon (parallel 2) |
+|--------|---------------------|---------------------|
+| Engine | Avalon HIP 0.26.0 | Avalon HIP 0.26.0 |
+| Backend | HIP / ROCm 7.8.0 | HIP / ROCm 7.8.0 |
+| Model | Qwen3.8-Flash-Next 125B MoE | Qwen3.8-Flash-Next 125B MoE |
+| Quantization | IQ3_K (33 shards) | IQ3_K (33 shards) |
+| Context | 200K | 200K |
+| Batch | 4096 | 4096 |
+| Draft | MTP n=3 | MTP n=3 |
+| Prefill 8192 | **~984 tps** | ~941 tps |
+| Decode 8192 | **~75 tps** | ~63 tps |
+| TTFT 8192 | ~5.5 s | ~5.8 s |
+| VRAM used | ~16.9 GB (full) | ~16.9 GB (full) |
+
+### Strata Results (Historical Only, Different Model)
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| Decode | ~64-75 tok/s | `STRATA_OPTIMIZATION.md` (historical, not live-tested) |
+| Model | Qwen3.8-Flash-Next IQ3_S | Different quantization, not 125B MoE |
+
+**Conclusion:** Avalon is the only engine that can be live-tested with the target Qwen3.8-Flash-Next 125B MoE model. Strata cannot be benchmarked on this hardware/software stack due to fundamental model incompatibility. A direct side-by-side comparison of the same test on both engines is not possible.
 
 ---
 
@@ -356,9 +414,10 @@ From `/home/timoti/rocm-bench/bench-rocm724.json`:
 | 2 | Avalon HIP --parallel 2 (dual-thread) | ✅ Done | — |
 | 3 | llama-latest (Vulkan 0.24.0) | ❌ **BLOCKED** | Avalon GGUF uses custom MoE tensor names (`blk.0.ffn_down_exps.weight`) incompatible with standard llama.cpp. No Qwen3.8-27B GGUF files available (only config.json in `/media/timoti/Data/lmstudio/models/unsloth/Qwen3.8-27B-GGUF/`). Cannot test llama-latest with the target Qwen3.8-Flash-Next 125B MoE model. |
 | 4 | rocmfpx-runtime (Vulkan, adaptive speculation) | ❌ **BLOCKED** | Same model incompatibility as llama-latest — rocmfpx is also based on llama.cpp and cannot load Avalon GGUF. |
-| 5 | Strata engine live benchmark | ❌ **BLOCKED** | Strata is a CLI-only tool (`strata generate`), not an HTTP server — cannot benchmark via perf-bench API probes. Also missing `libhipblas.so.3.4` (needs ROCm 7.13 path, system has 7.8.0 with `libhipblas.so.3.7`). Model paths in old config are invalid (`/media/timoti/Data/lmstudio/models/IQ3_S/` empty). |
-| 6 | ROCm 7.13 vs 7.8.0 comparison | ❌ Not tested | Requires switching `LD_LIBRARY_PATH` and rebuilding engines against different ROCm. Avalon built against 7.8.0 only. |
-| 7 | Model on Sapphire GPU (PCIe x2) | ❌ Not tested | Requires `HIP_VISIBLE_DEVICES=0` and separate engine instance on port 5900. |
+| 5 | Strata engine live benchmark | ❌ **BLOCKED** | `per_layer_token_embd.weight` missing from Strata model shards — engine cannot launch with `--native`. Binary lacks `--serve` HTTP mode. Needs `libhipblas.so.3.4` (ROCm 7.13). |
+| 6 | Direct side-by-side test (Avalon vs Strata) | ❌ **IMPOSSIBLE** | No shared model format — Avalon uses 33-shard GGUF, Strata uses native IQ packs. Same test cannot run on both engines. |
+| 7 | ROCm 7.13 vs 7.8.0 comparison | ❌ Not tested | Requires switching `LD_LIBRARY_PATH` and rebuilding engines against different ROCm. Avalon built against 7.8.0 only. |
+| 8 | Model on Sapphire GPU (PCIe x2) | ❌ Not tested | Requires `HIP_VISIBLE_DEVICES=0` and separate engine instance on port 5900. |
 
 ---
 
