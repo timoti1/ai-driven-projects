@@ -392,6 +392,37 @@ Tested 2026-11-01 with Avalon fork (HIP), ROCm 7.13 (`/opt/rocm/core-7.13/lib`).
 - For small models (4B), stock ROCm and Vulkan are competitive; rdna-boosts advantage is not clear-cut
 - rdna-boosts requires same K and V cache types (unlike Avalon which allows q8_0/q4_0 mix)
 
+### Qwen3.8-27B IQ3_XXS Benchmark (27B model, 9.8 GB)
+
+**Tested 2026-11-01.** All tests on GPU 1 (Gigabyte RX 9070, PCIe x16), context 32K, warm, repeat 1.
+
+| Engine | ROCm | Prefill 8192 | Decode 8192 | Decode 1024 | TTFT 8192 |
+|--------|------|-------------|-------------|-------------|----------|
+| rdna-boosts | 10.1 (HIP 7.16) | 949 tps | 39.1 tps | 40.1 tps | 5.38 s |
+| rdna-boosts | 7.17 nightly (HIP 7.17) | 941 tps | 32.4 tps | 33.2 tps | 5.71 s |
+| vanilla llama-b1347 | 7.17 nightly | 935 tps | 32.4 tps | 33.1 tps | 5.72 s |
+| rocm-llama (stock) | 10.1 (HIP 7.16) | 826 tps | 25.2 tps | 25.6 tps | 6.56 s |
+| llama-latest (Vulkan) | n/a | 779 tps | 33.7 tps | 34.5 tps | 6.87 s |
+| Avalon (HIP) | 10.1 (HIP 7.16) | 922 tps | 34.1 tps | 34.9 tps | 5.89 s |
+
+**Key Findings (27B model):**
+1. **rdna-boosts with ROCm 10.1 is fastest** in decode (39-40 tps)
+2. **ROCm 7.17 nightly is SLOWER than 10.1** for 27B model (32 vs 39 tps decode, −17%)
+3. **Vanilla llama.cpp = rdna-boosts** (same ROCm) — AMD fork adds no measurable gain at 27B
+4. **Stock ROCm fork is slowest** (25 tps decode, −36% vs rdna-boosts)
+5. **Vulkan is competitive in decode** but slower in prefill
+6. **Avalon (HIP) is close to rdna-boosts** (34 vs 39 tps, −13%)
+
+### ROCm Version Impact Summary
+
+| ROCm Version | 4B model (Spark) | 27B model (Qwen) | Notes |
+|--------------|-----------------|-----------------|-------|
+| 10.1 (HIP 7.16) | Best decode | Best decode | Production release |
+| 7.17 nightly (HIP 7.17) | +4% prefill, −12% decode | −17% decode | Newer HIP runtime, may have regressions |
+| 7.13 (HIP 7.13) | Not tested | Not tested | Preview release |
+
+**Conclusion:** ROCm 10.1 (HIP 7.16) provides the best overall performance for llama.cpp-based engines. The newer ROCm 7.17 nightly shows improvements in prefill but regressions in decode for larger models.
+
 ---
 
 ## 12. Strata Update: Old vs New Build (Corrected)
