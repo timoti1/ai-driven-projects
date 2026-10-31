@@ -167,14 +167,17 @@ avalon-qwen3.8-flash-next-C2:
 | decode | 8192 | — | ~44–49 | ~10.8 s |
 | decode | 32768 | — | ~47–50 | ~37–40 s |
 
-### llama-swap proxy overhead (port 8080 vs direct port 5800/5900)
+### llama-swap proxy overhead (port 8080 vs direct port 5800) — LIVE TEST 2026-10-31
 
-| Measurement | Via swap (8080) | Direct (5800/5900) | Ratio |
-|-------------|-----------------|--------------------|-------|
-| decode 1024 | ~15 tps | ~47–64 tps | ~3–4x slower via swap |
-| decode 8192 | ~15–17 tps | ~46–73 tps | ~3–4x slower via swap |
+| Metric | Direct (port 5800) | Via llama-swap (port 8080) | Overhead |
+|--------|-------------------|---------------------------|----------|
+| Prefill 8192 | ~984 tps | ~931–954 tps | ~3–5% |
+| Decode 8192 | ~71–80 tps | ~56–64 tps | ~20% |
+| TTFT 8192 | ~5.5–5.6 s | ~5.8–6.1 s | ~10% |
+| Decode 1024 | ~71–76 tps | ~63–67 tps | ~12% |
+| Decode 32768 | ~73–80 tps | ~58–65 tps | ~20% |
 
-**Conclusion:** llama-swap adds significant proxy overhead. For maximum performance, connect directly to the engine port.
+**Conclusion:** llama-swap adds **moderate overhead** (~20% decode, ~3–5% prefill). The previously claimed "3-4x overhead" was **not confirmed** by live testing. Direct engine connection is still preferred for maximum performance, but llama-swap overhead is not prohibitive.
 
 ## What Still Needs Testing
 

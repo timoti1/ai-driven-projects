@@ -229,24 +229,23 @@ python3 bench.py --host 127.0.0.1 --port 5800 --model avalon-qwen3.8-flash-next-
 
 ---
 
-### 5.3 llama-swap Proxy Overhead (port 8080 vs direct port 5800)
+### 5.3 llama-swap Proxy Overhead (port 8080 vs direct port 5800) — LIVE TEST 2026-10-31
 
 **Command:**
 ```bash
-python3 bench.py --host 192.168.1.104 --port 8080 --model avalon-qwen3.8-flash-next-C2 \
-  --tests health,prefill,decode --tag avalon-via-swap-baseline --repeat 2
+python3 bench.py --host 127.0.0.1 --port 8080 --model avalon-qwen3.8-flash-next-C2 \
+  --tests health,prefill,decode --tag avalon-via-swap-retest --repeat 2
 ```
 
-| Test | Depth | prefill_tps | decode_tps | first_token_s |
-|------|-------|-------------|------------|---------------|
-| prefill | 512 | error (HTTPError) | — | — |
-| prefill | 2048 | error | — | — |
-| prefill | 8192 | error | — | — |
-| decode | 1024 | — | ~15 | — |
-| decode | 8192 | — | ~15 | — |
-| decode | 32768 | — | ~17 | — |
+| Metric | Direct (port 5800) | Via llama-swap (port 8080) | Overhead |
+|--------|-------------------|---------------------------|----------|
+| Prefill 8192 | ~984 tps | ~931–954 tps | ~3–5% |
+| Decode 8192 | ~71–80 tps | ~56–64 tps | ~20% |
+| TTFT 8192 | ~5.5–5.6 s | ~5.8–6.1 s | ~10% |
+| Decode 1024 | ~71–76 tps | ~63–67 tps | ~12% |
+| Decode 32768 | ~73–80 tps | ~58–65 tps | ~20% |
 
-**Conclusion:** llama-swap proxy adds ~3-4x overhead. For maximum performance, connect directly to engine port (5800/5900), bypassing swap.
+**Conclusion:** llama-swap adds **moderate overhead** (~20% decode, ~3–5% prefill). The previously claimed "3-4x overhead" was **not confirmed** by live testing. Direct engine connection is still preferred for maximum performance, but llama-swap overhead is not prohibitive.
 
 ---
 
@@ -258,7 +257,7 @@ python3 bench.py --host 192.168.1.104 --port 8080 --model avalon-qwen3.8-flash-n
 | batch 4096, draft 2 | 2 | 4096 | 2 | ~889 tps | ~60 tps | ~10.8 s |
 | batch 4096, draft 3 (BEST, dual) | 2 | 4096 | 3 | ~941 tps | ~63 tps | ~5.8 s |
 | batch 4096, draft 3 (single, live-tested 2026-10-31) | 1 | 4096 | 3 | ~984 tps | ~75 tps | ~5.5 s |
-| Via llama-swap proxy | 2 | 4096 | 3 | — | ~15 tps | — |
+| Via llama-swap proxy (live-tested 2026-10-31) | 1 | 4096 | 3 | ~931–954 tps | ~56–64 tps | ~5.8–6.1 s |
 
 ---
 
