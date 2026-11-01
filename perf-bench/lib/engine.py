@@ -31,13 +31,25 @@ class Probe:
                                               **({"Authorization": "Bearer " + self.api_key} if self.api_key else {})})
         return time.time(), urllib.request.urlopen(req, timeout=self.timeout)
 
-    def _chat(self, prompt, max_tokens, temperature=0.0, stream=False):
+    def _chat(self, prompt, max_tokens, temperature=0.0, stream=False, extra=None):
         body = {"model": self.model, "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": max_tokens, "temperature": temperature}
+        if extra:
+            body.update(extra)
         if stream:
             body["stream"] = True
             body["stream_options"] = {"include_usage": True}
-        return self._post("/v1/chat/completions", body)
+        try:
+            return self._post("/v1/chat/completions", body)
+        except Exception:
+            if not extra:
+                raise
+            # server rejected the stability knobs (min_tokens/ignore_eos): retry without them
+            body = {k: v for k, v in body.items() if k not in ("min_tokens", "ignore_eos")}
+            if stream:
+                body["stream"] = True
+                body["stream_options"] = {"include_usage": True}
+            return self._post("/v1/chat/completions", body)
 
     def run_case(self, name, suite, model, spec, params):
         self.model = model
@@ -100,9 +112,14 @@ class Probe:
     def case_decode(self, name, suite, model, depth, spec):
         cpt = spec.get("chars_per_token", 4)
         n = spec.get("tokens", 128)
-        prompt = f"D{uuid.uuid4().hex[:8]} " + corpus_tokens(max(depth - 64, 64), cpt) + "\nAnswer briefly."
+        # Deterministic generation: greedy sampling + min_tokens floor so the model does not
+        # stop early on EOS. Early stops made completion vary 96..128 between repeats, which
+        # is the main source of the +/-30-50% decode noise seen in earlier runs.
+        extra = {"min_tokens": n, "ignore_eos": True}
+        prompt = (f"D{uuid.uuid4().hex[:8]} " + corpus_tokens(max(depth - 64, 64), cpt)
+                  + "\nWrite a long detailed answer of at least " + str(n) + " tokens.")
         try:
-            t0, r = self._chat(prompt, n, temperature=0.6, stream=True)
+            t0, r = self._chat(prompt, n, temperature=0.0, stream=True, extra=extra)
             first = None
             comp = 0
             for raw in r:

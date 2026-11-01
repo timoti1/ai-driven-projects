@@ -1,10 +1,15 @@
 # Avalon Optimization and Strata Comparison
 
-**Test Date:** 2026-10-31  
+**Test Dates:** 2026-10-31 … 2026-11-01  
 **Branch:** `aic8800-wifi-bt-driver`  
 **Repository:** `timoti1/ai-driven-projects`  
 **Directories:** `perf-tuning/` and `perf-bench/`  
-**Status:** Intermediate results, testing in progress
+**Status:** Complete for the engines and models listed
+
+> **Where to read first:** section **2b** (methodology — what was measured and why), then
+> section **16** (clean re-audit — the authoritative numbers). Sections 3–15 are the
+> earlier rounds; they are kept as history and each conflicting table is marked with what
+> superseded it. Section 17 is a side result: two identical GPUs in different PCIe slots.
 
 ---
 
@@ -40,6 +45,45 @@
 | ROCm | 7.8.0 | `/opt/rocm` |
 | HIP / hipcc | 7.16.26385-0000000, AMD clang 24.0.0 | `/usr/bin/hipcc` |
 | Vulkan ICD (Mesa RADV) | API 1.4.318 | `/home/timoti/mesa-build/libvulkan_radeon.so` |
+
+---
+
+## 2b. Test Methodology (How These Numbers Were Measured)
+
+**Added 2026-11-01.** The first rounds of measurements were noisy. The table below
+lists every methodology change and *why* it was made. Numbers in sections marked
+"clean re-audit" use the corrected methodology; earlier numbers are kept for
+reference but are superseded where they conflict.
+
+| # | Condition | Before | After | Why |
+|---|-----------|--------|-------|-----|
+| 1 | Sampling temperature | `0.6` | `0.0` (greedy) | Temperature makes the model choose different tokens on every repeat. Different tokens → different sequence lengths → different attention cost. Pure noise, measures nothing about the engine. Greedy decoding makes repeats directly comparable. |
+| 2 | Early stop at EOS | allowed | `min_tokens = n`, `ignore_eos = true` | With free EOS the model stopped whenever it liked: completions varied **96…128 tokens** between repeats. Throughput is computed over tokens actually generated, so a short run mostly measures fixed request overhead, not the engine. A fixed token count makes every repeat measure the same amount of work. |
+| 3 | Generation length | 128 tokens | 512 tokens | A 128-token generation is dominated by per-request overhead (HTTP, scheduling, first-token latency). Longer generation amortizes that overhead over real work, so the number describes steady-state decode. |
+| 4 | Prompt length | 512 / 2048 / 8192 | 512 / 2048 / 8192 / **16384** | Same reasoning as #3 for prefill. Long prompts also expose KV-cache and memory-bandwidth behaviour that short prompts hide. |
+| 5 | Repetitions | 1 | **3** | Three is enough *because* the load per repetition is now much bigger — longer prompts and 4× longer generations reduce the spread far more than more repetitions would. See measured stddev below. |
+| 6 | GPU selection (HIP) | `HIP_VISIBLE_DEVICES=1` only | + `-dev ROCm0` | Explicit device pin so the engine cannot spread across both cards. |
+| 7 | GPU selection (Vulkan) | `RADV_DEVICE=1` | **`-dev Vulkan1`** | `RADV_DEVICE` does **not** restrict devices for llama.cpp: `llama-bench` still reported `devices=auto` and both GPUs in `gpu_info`, i.e. it loaded across the Sapphire *and* the Gigabyte. Vulkan numbers measured that way are not single-card numbers. |
+| 8 | Resident models | several 125B models loaded at once | **one 125B engine at a time** | Avalon and Strata are both Qwen3.8-Flash-Next 125B MoE and both keep experts in system RAM. 62 GB cannot hold two: prefill collapsed to **3.7 tps** (RAM thrash). Any number taken while a second 125B model is resident is invalid. |
+| 9 | GPU state | engine measured while another model held ~16 GB of VRAM | engine measured with the card **free** | A 27B/125B engine either fails to allocate or silently offloads to CPU. The agent's own model has to be released before measuring other engines (see section 16). |
+
+### Why 3 repetitions are enough (measured stddev)
+
+Stability of the corrected setup, Qwen3.8-27B IQ3_XXS, GPU 1, `r=3`:
+
+| Measurement | Stddev |
+|-------------|--------|
+| prefill 512 | ±10.9% |
+| prefill 2048 | ±0.7% |
+| prefill 8192 | ±0.1% |
+| prefill 16384 | ±0.1% |
+| decode 512 | ±0.8% |
+
+**Rule that follows from this table:** `pp512` is not a usable comparison point —
+at 512 tokens the measurement is dominated by launch/scheduling latency and it
+carries 5–14% noise even with the fixed harness. Compare at **pp8192 / pp16384 /
+tg512**, where noise is 0.0–1.5%. Earlier rounds (temperature 0.6, free EOS, 128
+tokens, `r=1`) showed ±19% on `pp512`.
 
 ---
 
@@ -394,7 +438,10 @@ Tested 2026-11-01 with Avalon fork (HIP), ROCm 7.13 (`/opt/rocm/core-7.13/lib`).
 
 ### Qwen3.8-27B IQ3_XXS Benchmark (27B model, 9.8 GB)
 
-**Tested 2026-11-01.** All tests on GPU 1 (Gigabyte RX 9070, PCIe x16), context 32K, warm, repeat 1.
+**Tested 2026-11-01, then re-measured with the corrected methodology** (section 2b,
+`r=3`, greedy, fixed token counts, device pinned, card free). The clean numbers are
+in section 16; the table below is the earlier HTTP round, kept for TTFT and as a
+record of what was superseded.
 
 | Engine | ROCm | Prefill 8192 | Decode 8192 | Decode 1024 | TTFT 8192 |
 |--------|------|-------------|-------------|-------------|----------|
@@ -402,16 +449,21 @@ Tested 2026-11-01 with Avalon fork (HIP), ROCm 7.13 (`/opt/rocm/core-7.13/lib`).
 | rdna-boosts | 7.17 nightly (HIP 7.17) | 941 tps | 32.4 tps | 33.2 tps | 5.71 s |
 | vanilla llama-b1347 | 7.17 nightly | 935 tps | 32.4 tps | 33.1 tps | 5.72 s |
 | rocm-llama (stock) | 10.1 (HIP 7.16) | 826 tps | 25.2 tps | 25.6 tps | 6.56 s |
-| llama-latest (Vulkan) | n/a | 779 tps | 33.7 tps | 34.5 tps | 6.87 s |
+| llama-latest (Vulkan) | n/a | 779 tps [^vk] | 33.7 tps [^vk] | 34.5 tps [^vk] | 6.87 s |
 | Avalon (HIP) | 10.1 (HIP 7.16) | 922 tps | 34.1 tps | 34.9 tps | 5.89 s |
 
-**Key Findings (27B model):**
-1. **rdna-boosts with ROCm 10.1 is fastest** in decode (39-40 tps)
-2. **ROCm 7.17 nightly is SLOWER than 10.1** for 27B model (32 vs 39 tps decode, −17%)
-3. **Vanilla llama.cpp = rdna-boosts** (same ROCm) — AMD fork adds no measurable gain at 27B
-4. **Stock ROCm fork is slowest** (25 tps decode, −36% vs rdna-boosts)
-5. **Vulkan is competitive in decode** but slower in prefill
-6. **Avalon (HIP) is close to rdna-boosts** (34 vs 39 tps, −13%)
+[^vk]: Measured with `RADV_DEVICE=1`, which does not restrict devices — `llama-bench`
+reported `devices=auto` and both GPUs in `gpu_info`, so the model was loaded across
+Sapphire *and* Gigabyte. These three Vulkan cells are **not** single-card numbers and
+are superseded by section 16 (`-dev Vulkan1`, Gigabyte only).
+
+**Key Findings (27B model)** — revised by the clean re-audit in section 16:
+1. **rdna-boosts with ROCm 10.1 is fastest in prefill** (1058 tps at pp8192)
+2. **ROCm 7.17 nightly is SLOWER than 10.1** for 27B decode (33.2 vs 39.6 tps, −16%) — confirmed by clean re-measurement
+3. **Vanilla llama.cpp = rdna-boosts** at the same ROCm (1000 vs 1009 tps, 32.8 vs 33.2 tps) — the AMD fork adds no measurable gain at 27B
+4. **Stock ROCm fork is slowest** (26.0 tps decode, −34% vs rdna-boosts)
+5. **Vulkan wins decode** once pinned to a single card (40.4 tps) — see section 16
+6. **Avalon (HIP) is close to rdna-boosts** (−13% decode)
 
 ### ROCm Version Impact Summary
 
@@ -464,7 +516,9 @@ The initial "−42% decode regression" was **not** caused by the new build, but 
 
 ## 14. Avalon vs Strata: Qwen3.8-Flash-Next Direct Comparison
 
-**Tested 2026-11-01.** Both on GPU 1 (Gigabyte RX 9070, PCIe x16), warm, repeat 2.
+**Tested 2026-11-01, repeat 2, before the methodology fixes of section 2b. Superseded
+by section 16.4** (which uses greedy sampling, fixed 512-token generations and `r=3`).
+Kept because it records draft acceptance rates, which the clean round does not measure.
 
 | Metric | Avalon (IQ3KS 125B MoE + MTP) | Strata new (IQ3_XXS abliterated) | Strata vs Avalon |
 |--------|-------------------------------|----------------------------------|------------------|
@@ -491,6 +545,132 @@ The initial "−42% decode regression" was **not** caused by the new build, but 
 
 ---
 
+## 16. Clean Re-Audit (Authoritative Numbers)
+
+**Tested 2026-11-01.** Re-measurement of everything above under the corrected
+methodology of section 2b. These are the numbers to use; earlier tables are kept as
+history and are marked where they conflict.
+
+### What the audit found wrong
+
+1. **Vulkan was never pinned to one GPU.** `RADV_DEVICE=1` does not restrict devices.
+   `llama-bench` reported `devices=auto` and listed both cards in `gpu_info`, so the
+   model was sharded across Sapphire + Gigabyte. Every Vulkan cell before this section
+   measures a two-GPU configuration, not the Gigabyte alone. Correct flag: `-dev Vulkan1`.
+2. **Decode was measured on 128 free-EOS generations at temperature 0.6.** Completion
+   length varied 96…128 tokens between repeats, so repeats did not measure the same work.
+3. **Two 125B MoE models were resident at once** in one round (Avalon + Strata). RAM
+   thrash drove prefill to 3.7 tps. Any 125B number taken while another 125B model is
+   loaded is invalid.
+4. **`pp512` is not a comparison point.** Even with the fixed harness it carries 5–14%
+   noise; at temperature 0.6 it carried ±19%.
+
+Raw data for this section: `perf-tuning/results/audit-2026-11-01/` (local only —
+`perf-tuning/results/` and `perf-bench/results/` are gitignored by convention; the tables
+below are the record). It holds the llama-bench CSVs per engine, the perf-bench rows for
+the 125B head-to-head, and the orchestration scripts that produced them.
+
+### 16.1 llama-bench matrix — Qwen3.8-27B IQ3_XXS
+
+GPU 1 (Gigabyte, PCIe x16), device pinned (`-dev ROCm0` / `-dev Vulkan1`), `-b 4096 -ub 2048`,
+flash-attn on, KV f16, `r=3`, `tg=512`. Stddev at pp8192/pp16384/tg512 is 0.0–1.5%.
+
+| Engine | ROCm | pp2048 | pp8192 | pp16384 | tg512 | pp512 (noisy) |
+|--------|------|--------|--------|---------|-------|---------------|
+| rdna-boosts | 10.1 (HIP 7.16) | **1073.6** | **1058.5** | **1016.4** | 39.6 | 803.7 ±10.9% |
+| rdna-boosts | 7.13 | 822.0 | 960.8 | 1010.5 | 38.6 | 1042.4 ±0.0% |
+| rdna-boosts | 7.17 | 1030.7 | 1009.3 | 971.6 | 33.2 | 998.0 |
+| vanilla llama-b1347 | 7.17 | 1027.4 | 999.9 | 913.2 | 32.8 | 996.6 |
+| rocm-llama (stock) | 10.1 (HIP 7.16) | 883.6 | 876.9 | 833.3 | 26.0 | 826.5 ±10.5% |
+| llama-latest (Vulkan, one card) | n/a | 971.6 | 940.5 | 896.1 | **40.4** | 992.4 |
+
+### 16.2 llama-bench matrix — Spark-X2.6-4B IQ4_XS
+
+Same conditions.
+
+| Engine | ROCm | pp2048 | pp8192 | pp16384 | tg512 |
+|--------|------|--------|--------|---------|-------|
+| rdna-boosts | 10.1 | 6223.5 | 5912.1 | 5420.8 | 152.0 |
+| rdna-boosts | 7.17 | **6937.6** | **6628.1** | **6115.2** | 132.1 |
+| rocm-llama (stock) | 10.1 | 6709.1 | 6441.1 | 6000.7 | 133.5 |
+| llama-latest (Vulkan, one card) | n/a | 5223.7 | 4949.0 | 4522.6 | **161.9** |
+
+### 16.3 Revised conclusions (27B and 4B)
+
+1. **rdna-boosts + ROCm 10.1 wins prefill** at 27B (1058 tps at pp8192).
+2. **Vulkan wins decode** once pinned to a single card: 40.4 tps at 27B, 161.9 tps at 4B.
+   The earlier "Vulkan is slower" conclusion was an artifact of the two-GPU sharding bug.
+3. **ROCm 7.17 costs decode at 27B** (33.2 vs 39.6 tps, −16%) but *helps* the 4B model in
+   prefill (6628 vs 5912 tps, +12%). The ROCm-version effect is model-size dependent.
+4. **ROCm 7.13 is not competitive** (822 tps at pp2048, unstable).
+5. **Stock rocm-llama is the slowest engine** at 27B (26.0 tps decode, −34%).
+6. **Vanilla llama.cpp ≈ rdna-boosts** at identical ROCm (999.9 vs 1009.3 tps) — the AMD
+   fork's gain comes from its build ROCm version, not from the fork itself.
+
+### 16.4 125B head-to-head: Avalon vs Strata (through llama-swap)
+
+GPU 1 (Gigabyte), **one 125B model resident at a time**, warm, greedy (`temperature=0`,
+`min_tokens=512`, `ignore_eos`), `r=3`, median of 3 shown. Both are Qwen3.8-Flash-Next
+125B MoE; Avalon IQ3KS + MTP draft, Strata IQ3_XXS + built-in spec (`--spec 4`).
+
+| Metric | Avalon | Strata | Strata vs Avalon |
+|--------|--------|--------|------------------|
+| Prefill 2048 | 676 tps | 681 tps | +1% |
+| Prefill 8192 | 930 tps | **1869 tps** | **+101%** |
+| Prefill 16384 | 940 tps | **2386 tps** | **+154%** |
+| Decode @1024 | 58.8 tps | **69.8 tps** | +19% |
+| Decode @8192 | 63.9 tps | **65.7 tps** | +3% |
+| Decode @32768 | 59.1 tps | **62.4 tps** | +6% |
+| TTFT @8192 | 5.86 s | **2.91 s** | −50% |
+| TTFT @32768 | 20.7 s | **9.26 s** | −55% |
+
+Notes on stability: Avalon decode spread was ±3% (deterministic MTP), Strata spread was
+wider (49.9…71.7 tps at depth 32768) because its speculative acceptance rate varies with
+content — the median is the honest summary, and Strata's *worst* case can fall below
+Avalon.
+
+**Conclusion:** Strata is the right engine for this model. Its advantage is concentrated
+in prefill/TTFT (2–2.5x), and it also holds a small decode lead. Avalon remains the more
+predictable one at long context.
+
+---
+
+## 17. PCIe x2 vs x16: Sapphire vs Gigabyte (same GPU model)
+
+Both cards are identical RX 9070 (gfx1201, 16 GB); they differ only in slot width —
+Sapphire sits in a PCIe x2 slot (0a:00.0), Gigabyte in x16 (05:00.0).
+
+**Caveats — read before using these numbers.** This round used the *old* methodology
+(`tg=128`, no device pin for Vulkan, `r=3`), and it ran while the agent's own Avalon 125B
+model was resident on the other card, holding ~16 GB VRAM and a large CPU-side expert
+table. HIP runs were restricted to one device (`HIP_VISIBLE_DEVICES=0`), so their VRAM
+figures are clean, but CPU RAM contention biases the MoE numbers **downward** for
+Sapphire. Vulkan rows from that round are unusable (`devices=auto` → both cards).
+
+| Engine / model | Slot | pp8192 | tg128 |
+|----------------|------|--------|-------|
+| rdna-boosts, 27B, ROCm 10.1 | x2 (Sapphire) | 967.7 | 38.8 |
+| rdna-boosts, 27B, ROCm 10.1 | x16 (Gigabyte) | 1058.5 [^x16] | 39.6 (tg512) |
+| rdna-boosts, 27B, ROCm 7.17 | x2 | 942.6 | 32.3 |
+| rdna-boosts, 27B, ROCm 7.17 | x16 | 1009.3 [^x16] | 33.2 (tg512) |
+| rocm-llama stock, 27B, ROCm 10.1 | x2 | 863.0 | 25.2 |
+| rocm-llama stock, 27B, ROCm 10.1 | x16 | 876.9 [^x16] | 26.0 (tg512) |
+| rdna-boosts, 4B, ROCm 10.1 | x2 | 5327.1 | 144.0 |
+| rdna-boosts, 4B, ROCm 10.1 | x16 | 5912.1 [^x16] | 152.0 (tg512) |
+| rocm-llama stock, 4B, ROCm 10.1 | x2 | 5781.7 | 105.3 |
+| rocm-llama stock, 4B, ROCm 10.1 | x16 | 6441.1 [^x16] | 133.5 (tg512) |
+
+[^x16]: x16 column is from the clean re-audit (section 16.1–16.2), so the two columns do
+not share a methodology; decode rows compare `tg128` with `tg512` and are indicative only.
+
+**Reading:** prefill on the x2 slot is **1.5–10% slower**, largest for the 4B models where
+weights stream from system RAM, smallest for stock rocm-llama at 27B. Decode is essentially
+slot-independent: once the weights are resident, the work is GPU-local and does not cross
+the PCIe link. Given the CPU-contention bias, the true x2 penalty is likely at the low end
+of that range — a second card in an x2 slot costs little for decode-heavy use.
+
+---
+
 ## 15. Future Testing
 
 | Test | Priority | Notes |
@@ -498,5 +678,8 @@ The initial "−42% decode regression" was **not** caused by the new build, but 
 | ROCm 7.2.4 vs 7.8.0 | Medium | Switch `LD_LIBRARY_PATH` to `/home/timoti/rocm724-portable/lib` |
 | Model on Sapphire GPU (PCIe x2) | Low | `HIP_VISIBLE_DEVICES=0`, port 5900 |
 | Sweep `--spec-draft-n-max` 2/3/4 | Medium | For Avalon |
-| Direct Strata connection (no llama-swap) | Medium | Requires HTTP server in Strata binary |
+| Direct Strata connection (no llama-swap) | Medium | `--serve` exists; `--bench-pp`/`--bench-tg` also exist but rejected the flag combination used in the audit (rc=2) — worth a separate attempt |
 | rdna-boosts with larger model | Low | Need model that fits in 16 GB VRAM (e.g., 7-14B) |
+| Avalon native `llama-bench` on Flash-Next | Blocked | 125B needs ~55 GB of buffer allocation; `llama-bench` has no CPU-expert offload, so it fails to load. Avalon 125B can only be measured through its server path |
+| Vulkan re-measure of the 125B engines | Medium | Vulkan won decode at 27B/4B; never tried on Flash-Next |
+| Re-run section 17 with the corrected methodology | Medium | Same `tg` length on both slots, no agent resident |

@@ -1,0 +1,7 @@
+{
+ "description": "Long-load suite for stable averages: bigger prompts, 512-token greedy generations (min_tokens + ignore_eos), repeat 3.",
+ "cases": {
+  "pp": {"type": "prefill", "sweep_values": [512, 2048, 8192, 16384], "chars_per_token": 4},
+  "tg": {"type": "decode", "sweep_values": [1024, 8192, 32768], "tokens": 512, "chars_per_token": 4}
+ }
+}
