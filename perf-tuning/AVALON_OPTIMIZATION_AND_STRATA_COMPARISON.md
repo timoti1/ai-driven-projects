@@ -468,25 +468,26 @@ The initial "−42% decode regression" was **not** caused by the new build, but 
 
 | Metric | Avalon (IQ3KS 125B MoE + MTP) | Strata new (IQ3_XXS abliterated) | Strata vs Avalon |
 |--------|-------------------------------|----------------------------------|------------------|
-| Prefill 8192 | ~945 tps | ~1748–1847 tps | **+85%** |
-| Decode 128 | ~56 tps | ~70–87 tps | **+25–55%** |
-| Draft acceptance | 50% (mean len 2.49) | — | — |
-| TTFT (8192 prompt) | ~5.5 s | ~3.1 s | **−44%** |
+| Prefill 8192 | ~1000 tps | ~1748–1847 tps | **+80%** |
+| Decode 8192 | ~80 tps | ~80 tps | **≈ equal** |
+| Decode 32768 | ~45–78 tps | ~49–93 tps | Strata more stable |
+| Draft acceptance | 60–70% (mean len 2.8–3.1) | — | — |
+| TTFT (8192 prompt) | ~5.4 s | ~3.1 s | **−43%** |
 
 **Notes:**
-- Avalon uses `--spec-type draft-mtp --spec-draft-n-max 3` with MTP draft model
-- Avalon uses `-ctk q8_0 -ctv q4_0` (mixed KV cache types)
-- Strata uses `--spec 4` (built-in spec decoding, no separate draft model)
-- Strata uses `--kv int8` (int8 KV cache)
+- Avalon: `-c 32768 -b 4096 -ub 2048 -fa on -ctk q8_0 -ctv q4_0 --parallel 1`
+  + `-md <mtp> --spec-type draft-mtp --spec-draft-n-max 3 --no-reasoning-preserve -ubd 256 -ctkd q8_0 -ctvd q4_0`
+- Strata: `--spec 4 --kv int8 --kv-resident 20480` (built-in spec, no separate draft model)
 - Strata is a custom engine optimized for this specific model architecture
 - The abliterated model (Strata) is slightly smaller than the full Avalon fork model
+- **Context size matters:** Avalon with `-c 200000` drops to ~60 tps decode (KV cache pressure)
 
-**Conclusion:** Strata is significantly faster than Avalon for Qwen3.8-Flash-Next on this hardware:
-- **Prefill: 1.85x faster** (1847 vs 945 tps)
-- **Decode: 1.4x faster** (80 vs 56 tps)
-- **TTFT: 44% lower** (3.1s vs 5.5s)
-
-This confirms Strata is the optimal engine for this model family on RDNA4.
+**Conclusion:**
+- **Prefill: Strata is 1.85x faster** (1847 vs 1000 tps) — dominates TTFT
+- **Decode: Comparable** (~80 tps both) when using `-c 32768`
+- **TTFT: Strata 43% lower** (3.1s vs 5.4s) due to prefill advantage
+- For short-context workloads, Avalon is competitive in decode
+- For long-context or high-TTFT workloads, Strata is clearly superior
 
 ---
 
