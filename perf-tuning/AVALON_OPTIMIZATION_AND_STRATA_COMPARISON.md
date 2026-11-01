@@ -9,7 +9,9 @@
 > **Where to read first:** section **2b** (methodology — what was measured and why), then
 > section **16** (clean re-audit — the authoritative numbers). Sections 3–15 are the
 > earlier rounds; they are kept as history and each conflicting table is marked with what
-> superseded it. Section 17 is a side result: two identical GPUs in different PCIe slots.
+> superseded it. Section **17** is the PCIe slot test: the same GPU model in an x2 and an
+> x16 slot — irrelevant for models that fit in VRAM, decisive for a MoE that keeps experts in
+> system RAM (−90% prefill).
 
 ---
 
@@ -254,6 +256,9 @@ Both models tested through the same `llama-swap` proxy on port 8080, identical t
 3. **Avalon is slightly better in decode** — ~68.7 vs ~65.1 tps (+5.5% for Avalon)
 4. **At long context (32K)** — approximately equal (~65 tps)
 5. **At short prefill (512–2048)** — Avalon significantly outperforms Strata
+6. **The PCIe slot decides the MoE** — a model that fits in VRAM loses 2–8% on an x2 slot,
+   a 125B MoE with experts in system RAM loses 85–92% of prefill (section 17, 2026-11-01).
+   The numbers 1–5 above are all from the x16 card; see section 16 for the corrected versions.
 
 ### Architectural Differences
 
@@ -732,13 +737,81 @@ system RAM and pull them across the bus on every token. This is the case where a
 link should hurt badly.
 
 Measured through the identical llama-swap path, only `HIP_VISIBLE_DEVICES` changed
-(1 → 0), one model resident at a time. See section 16.4 for the x16 baseline.
+(1 → 0), one model resident at a time. See section 16.4 for the x16 baseline. Strata was
+pinned with its own config (`"gpu": 0`), served on a second llama-swap instance at `:8081`.
 
-*(Batch B in progress — results appended below when complete.)*
+**Strata (new build, ROCm 7.17), Qwen3.8-Flash-Next 125B IQ3_XXS — median of 3:**
+
+| Test | x16 (Gigabyte) | x2 (Sapphire) | x2/x16 | Loss |
+|------|---------------|---------------|--------|------|
+| pp512 | 284.4 | 27.3 | 0.096 | **−90.4%** |
+| pp2048 | 680.8 | 57.1 | 0.084 | **−91.6%** |
+| pp8192 | 1869.2 | 205.1 | 0.110 | **−89.0%** |
+| pp16384 | 2385.8 | 366.2 | 0.153 | **−84.7%** |
+| tg1024 (512 tok) | 69.8 | 35.7 | 0.511 | −48.9% |
+| tg8192 (512 tok) | 65.7 | 28.0 | 0.426 | −57.4% |
+| tg32768 (512 tok) | 62.4 | 26.4 | 0.423 | −57.7% |
+
+| Time to first token | x16 | x2 | Slower |
+|---------------------|-----|-----|--------|
+| at depth 1024 | 2.0 s | 16.3 s | **8.2x** |
+| at depth 8192 | 2.9 s | 26.3 s | **9.1x** |
+| at depth 32768 | 9.3 s | 108.3 s | **11.6x** |
+
+Every row is n=3 and the spread is tight (pp8192: 205.0 / 205.1 / 205.2 — a 0.1% spread),
+so this is not noise. A 16x bus turns into a **6.5x prefill loss and a 2.4x decode loss**.
+
+**Why the two phases differ.** The bus moves 2.0 GB/s instead of 31.5 GB/s. Prefill touches
+most experts of every token in the prompt, so its aggregate expert traffic is what sets the
+clock; on the x2 slot that traffic queues behind a 2 GB/s link and the GPU idles. Decode
+routes only a handful of experts per token, and part of that fetch overlaps with compute, so
+the loss is roughly half the bus ratio rather than all of it.
+
+Short prompts lose the most (−90% at pp512 vs −85% at pp16384, and TTFT degrades 8–12x).
+That is latency, not throughput: many small expert fetches per token with no time to pipeline
+them, each paying PCIe round-trip cost. Long prompts amortize it, which is why pp16384 keeps
+15% of its x16 speed while pp512 keeps 10%.
+
+**The practical rule:**
+
+- A model that fits in VRAM does not care about the slot (section 17.1: 2–8%).
+- A MoE that keeps experts in system RAM cares enormously: put it on the CPU-attached x16
+  slot, never on a chipset x2 slot. The second card is the right place for dense resident
+  models and the wrong place for this one.
+- On the x2 slot, decode-heavy long-context work is the least damaged case (−49…−58%);
+  anything prompt-heavy (RAG, long document ingest, agents resending context) is unusable at
+  27–366 tps with 100 s TTFT.
+
+### 17.3 Avalon on the x2 slot — not measured, the machine hung
+
+The same batch was going to measure Avalon (the agent's own engine) on the Sapphire slot.
+While it loaded, the machine hard-froze and had to be power-cycled; `/tmp` was lost, so the
+Avalon x2 numbers do not exist.
+
+The likely cause is memory, not the GPU. The box has 62 GB of RAM and an 8 GB swap file.
+Strata's 125B run had already consumed ~47 GB, and Avalon's loader wants ~55 GB of buffers
+at once. Even with Strata killed first, the two loads overlapped or the page cache never
+dropped, and the system swapped itself into an unresponsive state — a hard freeze leaves no
+kernel log behind.
+
+**If this is re-run:** check `free -g` immediately before the load, drop caches first
+(`sync; echo 3 | sudo tee /proc/sys/vm/drop_caches`), and do not chain two 125B engines in
+one script. Given section 17.2, the expected result is a loss of the same order as Strata's —
+the mechanism (experts in system RAM crossing the bus) is identical for both engines.
+
+### 17.4 Summary of the slot test
+
+| Model class | Resident in 16 GB VRAM? | x2 slot penalty |
+|-------------|-------------------------|-----------------|
+| Dense 4B / 27B, all engines | yes | **−1.3% … −8% median** (best engines −2%) |
+| 125B MoE, experts in system RAM | no | **−85% … −92% prefill, −49% … −58% decode** |
+
+The slot is irrelevant for resident models and decisive for streaming ones. Slot width, not
+GPU model, is the single biggest variable in this comparison.
 
 ---
 
-## 15. Future Testing
+## 18. Future Testing
 
 | Test | Priority | Notes |
 |------|----------|-------|
@@ -749,4 +822,6 @@ Measured through the identical llama-swap path, only `HIP_VISIBLE_DEVICES` chang
 | rdna-boosts with larger model | Low | Need model that fits in 16 GB VRAM (e.g., 7-14B) |
 | Avalon native `llama-bench` on Flash-Next | Blocked | 125B needs ~55 GB of buffer allocation; `llama-bench` has no CPU-expert offload, so it fails to load. Avalon 125B can only be measured through its server path |
 | Vulkan re-measure of the 125B engines | Medium | Vulkan won decode at 27B/4B; never tried on Flash-Next |
-| Re-run section 17 with the corrected methodology | Medium | Same `tg` length on both slots, no agent resident |
+| Avalon on the x2 (Sapphire) slot | Medium | The run hung the machine (RAM exhaustion, see 17.3); expected to lose like Strata |
+| Strata x2 at longer generations | Low | 512-token decode already measured; 2048 would separate bus-bound from KV-bound |
+| Two 125B engines without a reboot between them | Medium | Needs cache drop + a memory guard; a hard freeze loses `/tmp` and any uncommitted results |
