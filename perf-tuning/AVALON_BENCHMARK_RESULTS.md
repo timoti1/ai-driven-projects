@@ -4,6 +4,14 @@
 **System:** ryzen5800 (192.168.1.104)  
 **Tool:** `/home/timoti/ai-driven-projects/perf-bench/bench.py`
 
+> **Status: historical.** This file records the Avalon parameter sweep and the per-run detail
+> behind it, measured 2026-10-31 under the *old* methodology (`temperature=0.6`, free EOS,
+> 128-token generations, `r=1–2`). Absolute throughput values here are superseded by
+> `AVALON_OPTIMIZATION_AND_STRATA_COMPARISON.md` §6, which re-measured the same engines
+> greedy, at 512 tokens, `r=3`. The *direction and size of each configuration change* is
+> still valid and is summarized in §8 of that document. For any current number, read
+> `AVALON_OPTIMIZATION_AND_STRATA_COMPARISON.md` first.
+
 ---
 
 ## 1. Hardware Specification

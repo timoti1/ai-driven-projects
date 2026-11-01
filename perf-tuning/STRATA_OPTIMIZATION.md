@@ -4,6 +4,15 @@ Experiments from October 22, 2026: squeezing the most out of the Strata
 engine on a consumer AMD build — what actually helps, what does not. All
 numbers measured here; nothing borrowed from other write-ups.
 
+> **Status: historical, and still the reference for Strata flags.** These are sweep results
+> for `--kv-resident`, `--mtp-hnorm` and the MTP options, measured on IQ3_S with the *old*
+> methodology. The flag recommendations below still hold and are what the deployed configs
+> use. For current engine-versus-engine throughput, and for the ROCm-version and PCIe-slot
+> findings, read `AVALON_OPTIMIZATION_AND_STRATA_COMPARISON.md` (§6 for the Avalon/Strata
+> head-to-head, §9 for ROCm versions, §7 for the slot). Note one correction that came after
+> these notes: Strata's apparent "−42% decode regression" in a newer build was **not** a
+> build change — it was a different ROCm version resolved at run time (see §10).
+
 ## Hardware
 
 | | |
