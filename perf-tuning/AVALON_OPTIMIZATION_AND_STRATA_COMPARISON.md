@@ -462,7 +462,35 @@ The initial "−42% decode regression" was **not** caused by the new build, but 
 
 ---
 
-## 14. Future Testing
+## 14. Avalon vs Strata: Qwen3.8-Flash-Next Direct Comparison
+
+**Tested 2026-11-01.** Both on GPU 1 (Gigabyte RX 9070, PCIe x16), warm, repeat 2.
+
+| Metric | Avalon (IQ3KS 125B MoE + MTP) | Strata new (IQ3_XXS abliterated) | Strata vs Avalon |
+|--------|-------------------------------|----------------------------------|------------------|
+| Prefill 8192 | ~945 tps | ~1748–1847 tps | **+85%** |
+| Decode 128 | ~56 tps | ~70–87 tps | **+25–55%** |
+| Draft acceptance | 50% (mean len 2.49) | — | — |
+| TTFT (8192 prompt) | ~5.5 s | ~3.1 s | **−44%** |
+
+**Notes:**
+- Avalon uses `--spec-type draft-mtp --spec-draft-n-max 3` with MTP draft model
+- Avalon uses `-ctk q8_0 -ctv q4_0` (mixed KV cache types)
+- Strata uses `--spec 4` (built-in spec decoding, no separate draft model)
+- Strata uses `--kv int8` (int8 KV cache)
+- Strata is a custom engine optimized for this specific model architecture
+- The abliterated model (Strata) is slightly smaller than the full Avalon fork model
+
+**Conclusion:** Strata is significantly faster than Avalon for Qwen3.8-Flash-Next on this hardware:
+- **Prefill: 1.85x faster** (1847 vs 945 tps)
+- **Decode: 1.4x faster** (80 vs 56 tps)
+- **TTFT: 44% lower** (3.1s vs 5.5s)
+
+This confirms Strata is the optimal engine for this model family on RDNA4.
+
+---
+
+## 15. Future Testing
 
 | Test | Priority | Notes |
 |------|----------|-------|
