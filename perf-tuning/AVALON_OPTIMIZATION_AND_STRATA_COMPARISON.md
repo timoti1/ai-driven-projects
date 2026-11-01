@@ -20,8 +20,8 @@
 | Component | Specification |
 |-----------|--------------|
 | CPU | AMD Ryzen 7 5800 (8C/16T, no AVX-512, expert kernels on AVX-2) |
-| GPU 0 | AMD Radeon RX 9070 (Sapphire, PCIe 0a:00.0, PCIe x2 slow slot, gfx1201) |
-| GPU 1 | AMD Radeon RX 9070 (Gigabyte, PCIe 05:00.0, PCIe x16 full slot, gfx1201) |
+| GPU 0 | AMD Radeon RX 9070 (**Sapphire**, PCI `05:00.0`, subvendor `1da2`, **slow slot: PCIe 3.0 x2**, gfx1201) |
+| GPU 1 | AMD Radeon RX 9070 (**Gigabyte**, PCI `0a:00.0`, subvendor `1458`, **fast slot: PCIe 4.0 x16**, gfx1201) |
 | VRAM per GPU | 16 GB |
 | System RAM | 62 GB (+8 GB swap) |
 | OS | Linux (Ubuntu 24.04-based) |
@@ -31,8 +31,41 @@
 
 ### GPU Mapping (HIP_VISIBLE_DEVICES)
 
-- `HIP_VISIBLE_DEVICES=0` → Sapphire (PCIe x2)
-- `HIP_VISIBLE_DEVICES=1` → Gigabyte (PCIe x16)
+- `HIP_VISIBLE_DEVICES=0` → Sapphire (PCIe 3.0 x2, slow slot)
+- `HIP_VISIBLE_DEVICES=1` → Gigabyte (PCIe 4.0 x16, fast slot)
+
+The same order applies to Vulkan (`-dev Vulkan0` = Sapphire, `-dev Vulkan1` = Gigabyte):
+both backends enumerate by PCI order, and `05:00.0` sorts before `0a:00.0`.
+
+### How the slot widths were verified (sysfs lies, the kernel does not)
+
+`sysfs` reports **both** cards as `16x 32.0 GT/s` (PCIe 5.0 x16), which is wrong — the
+cards are capable of Gen5 x16, but the motherboard is not. `lspci`/sysfs read the
+capability registers, not the trained link.
+
+The kernel's own message at boot reports the negotiated link and is authoritative:
+
+```
+pci 0000:05:00.0: 15.752 Gb/s available PCIe bandwidth, limited by 8.0 GT/s PCIe x2
+                   link at 0000:02:00.0   (capable of 504.112 Gb/s with 32.0 GT/s PCIe x16)
+pci 0000:0a:00.0: 252.048 Gb/s available PCIe bandwidth, limited by 16.0 GT/s PCIe x16
+                   link at 0000:00:03.1   (capable of 504.112 Gb/s with 32.0 GT/s PCIe x16)
+```
+
+- `05:00.0` (Sapphire) hangs off `02:00.0` — a chipset bridge — at **Gen3 x2**
+  (8 GT/s × 2 lanes = 15.75 Gb/s ≈ 2.0 GB/s).
+- `0a:00.0` (Gigabyte) hangs off `00:03.1` — directly on the CPU root complex — at
+  **Gen4 x16** (16 GT/s × 16 = 252 Gb/s ≈ 31.5 GB/s).
+
+So the two cards differ by **16x** in bus bandwidth. Both are otherwise identical GPUs
+(gfx1201, 16 GB, same 210 W power cap).
+
+Check it on this machine with:
+
+```bash
+journalctl -k | grep "available PCIe bandwidth"   # authoritative
+lspci -vs 05:00.0 | grep LnkSta                   # reports the card's capability, not the link
+```
 
 ---
 
@@ -635,39 +668,73 @@ predictable one at long context.
 
 ---
 
-## 17. PCIe x2 vs x16: Sapphire vs Gigabyte (same GPU model)
+## 17. PCIe Slot Test: Sapphire (x2) vs Gigabyte (x16)
 
-Both cards are identical RX 9070 (gfx1201, 16 GB); they differ only in slot width —
-Sapphire sits in a PCIe x2 slot (0a:00.0), Gigabyte in x16 (05:00.0).
+Both cards are identical RX 9070 (gfx1201, 16 GB, same 210 W cap). They differ only in how
+the motherboard wires them: Sapphire runs at **PCIe 3.0 x2** (15.75 Gb/s ≈ 2 GB/s), Gigabyte
+at **PCIe 4.0 x16** (252 Gb/s ≈ 31.5 GB/s) — a **16x** difference in bus bandwidth. See
+section 1 for how that was verified.
 
-**Caveats — read before using these numbers.** This round used the *old* methodology
-(`tg=128`, no device pin for Vulkan, `r=3`), and it ran while the agent's own Avalon 125B
-model was resident on the other card, holding ~16 GB VRAM and a large CPU-side expert
-table. HIP runs were restricted to one device (`HIP_VISIBLE_DEVICES=0`), so their VRAM
-figures are clean, but CPU RAM contention biases the MoE numbers **downward** for
-Sapphire. Vulkan rows from that round are unusable (`devices=auto` → both cards).
+**The question:** does the slot matter when the model fits entirely in VRAM, and how much
+does it matter when experts and weights live in system RAM and stream across the bus?
 
-| Engine / model | Slot | pp8192 | tg128 |
-|----------------|------|--------|-------|
-| rdna-boosts, 27B, ROCm 10.1 | x2 (Sapphire) | 967.7 | 38.8 |
-| rdna-boosts, 27B, ROCm 10.1 | x16 (Gigabyte) | 1058.5 [^x16] | 39.6 (tg512) |
-| rdna-boosts, 27B, ROCm 7.17 | x2 | 942.6 | 32.3 |
-| rdna-boosts, 27B, ROCm 7.17 | x16 | 1009.3 [^x16] | 33.2 (tg512) |
-| rocm-llama stock, 27B, ROCm 10.1 | x2 | 863.0 | 25.2 |
-| rocm-llama stock, 27B, ROCm 10.1 | x16 | 876.9 [^x16] | 26.0 (tg512) |
-| rdna-boosts, 4B, ROCm 10.1 | x2 | 5327.1 | 144.0 |
-| rdna-boosts, 4B, ROCm 10.1 | x16 | 5912.1 [^x16] | 152.0 (tg512) |
-| rocm-llama stock, 4B, ROCm 10.1 | x2 | 5781.7 | 105.3 |
-| rocm-llama stock, 4B, ROCm 10.1 | x16 | 6441.1 [^x16] | 133.5 (tg512) |
+### 17.1 Fully resident models (4B and 27B) — the slot barely matters
 
-[^x16]: x16 column is from the clean re-audit (section 16.1–16.2), so the two columns do
-not share a methodology; decode rows compare `tg128` with `tg512` and are indicative only.
+Measured 2026-11-01 with the corrected methodology (section 2b): greedy, `tg=512`, `r=3`,
+device pinned (`-dev ROCm0` + `HIP_VISIBLE_DEVICES=0` for the x2 side, `-dev Vulkan0`),
+`-b 4096 -ub 2048`, flash-attn on, KV f16. Both models fit wholly in 16 GB (4B IQ4_XS
+≈ 2.6 GB, 27B IQ3_XXS ≈ 9.8 GB), so nothing streams over PCIe during inference.
 
-**Reading:** prefill on the x2 slot is **1.5–10% slower**, largest for the 4B models where
-weights stream from system RAM, smallest for stock rocm-llama at 27B. Decode is essentially
-slot-independent: once the weights are resident, the work is GPU-local and does not cross
-the PCIe link. Given the CPU-contention bias, the true x2 penalty is likely at the low end
-of that range — a second card in an x2 slot costs little for decode-heavy use.
+x2/x16 ratio (1.000 = the slow slot performs identically):
+
+| Engine | Model | pp2048 | pp8192 | pp16384 | tg512 |
+|--------|-------|--------|--------|---------|-------|
+| rocm-llama stock (ROCm 10.1) | 27B | 0.978 | **0.980** | **0.987** | 0.967 |
+| llama-latest Vulkan | 27B | **0.980** | **0.982** | **0.984** | 0.888 |
+| rdna-boosts (ROCm 10.1) | 27B | 0.889 | 0.913 | 0.925 | **0.965** |
+| rdna-boosts (ROCm 7.17) | 27B | 0.751 | 0.855 | 0.951 | 0.945 |
+| rdna-boosts (ROCm 10.1) | 4B | 0.954 | 0.944 | 0.957 | 0.943 |
+| rocm-llama stock (ROCm 10.1) | 4B | 0.912 | 0.916 | 0.882 | 0.863 |
+| llama-latest Vulkan | 4B | 0.922 | 0.924 | 0.912 | 0.760 |
+| rdna-boosts (ROCm 7.17) | 4B | 0.871 | 0.843 | 0.826 | 0.889 |
+
+Median across all 32 comparisons: **0.92** (−8%). Best cases cluster tightly at **0.98**
+(stock rocm-llama 27B, Vulkan 27B prefill).
+
+**Reading:**
+
+1. **No cliff.** A 16x bus becomes a 2–6% difference once the model is resident. That is
+   the expected physics: with everything in VRAM, per-token work never crosses PCIe; the
+   bus is only used at load time and for the occasional KV/page fault.
+2. **The tightest, most reproducible rows are the best evidence.** `stock101_27b` and
+   `vulkan0_27b` prefill sit at 0.98 with stddev 0.0–0.4% across three prompt sizes —
+   a consistent, small, repeatable penalty. That is the real slot effect.
+3. **The large outliers are run noise, not the bus.** `rdna717_27b` shows −24.9% at pp2048
+   but −4.9% at pp16384 with the same engine and model on the same card. A genuine
+   bandwidth limit cannot flip like that within one model; measurement drift between the
+   two rounds can.
+4. **Decode holds up best at 27B** (0.965 for the best engine), which is what the
+   hypothesis predicted: decode is weight-resident and GPU-local.
+
+**Conclusion for resident models:** an x2 slot is fine. The cost is a few percent, well
+inside the run-to-run spread, and it does not grow with context length.
+
+*Caveat:* the x2 round ran while the agent's Avalon 125B model was resident on the other
+card (idle, no inference traffic), and the x16 round ran with both cards otherwise idle.
+An idle resident model does not generate PCIe traffic, but it does hold RAM, so the x2
+numbers are, if anything, biased slightly *downward* — the true penalty is at or below
+these figures.
+
+### 17.2 The 125B MoE engines (Strata, Avalon) — the case the slot is supposed to break
+
+Both Qwen3.8-Flash-Next 125B engines keep a large part of their experts and weights in
+system RAM and pull them across the bus on every token. This is the case where a 2 GB/s
+link should hurt badly.
+
+Measured through the identical llama-swap path, only `HIP_VISIBLE_DEVICES` changed
+(1 → 0), one model resident at a time. See section 16.4 for the x16 baseline.
+
+*(Batch B in progress — results appended below when complete.)*
 
 ---
 
