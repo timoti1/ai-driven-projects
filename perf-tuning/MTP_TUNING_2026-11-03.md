@@ -18,10 +18,11 @@ configuration is now live. Companion tooling lives in
   allocator settings**, and `GGML_CUDA_SLAB_HEADROOM_MIB=896` recovered it
   (+9 % over r206 default, slightly above the r191 baseline). Details in
   [Working with the rdna-boosts fork](#working-with-the-rdna-boosts-fork).
-- The October baseline in `ai-models-bench` measured the wrong quantity: its
-  cache-busting nonce sat at the **end** of the prompt, so llama.cpp's prefix
-  cache (which matches from token 0) replayed almost the whole prompt. Those
-  prefill numbers are not comparable to anything measured since.
+- The October snapshot cannot serve as an A/B reference: it recorded **no engine
+  version and no server flags**, ran one repetition timed by wall clock, and left
+  4 of 10 rows null. Its prefill *was* genuinely cache-cold (`cached_tokens = 0`
+  on every row), so the numbers are real for what they measured — they are just
+  unattributable. See [baseline-2026-10-13/](baseline-2026-10-13/).
 - The MoE engine update 386 commits ahead is **blocked** for long-prompt work: a
   multi-ubatch prefill bug zeroes MTP acceptance. See *Open items*.
 
@@ -330,34 +331,46 @@ All MoE numbers in this document include that quality trade-off.
 
 ---
 
-## Why the October baseline is not comparable
+## Why the October snapshot is not comparable
 
-A pre-existing suite (`ai-models-bench`, run 13 October) measured some of the same
-models. Its numbers look like a regression waiting to be noticed, but the two runs
-measure different quantities:
+A pre-existing suite (run 13 October) measured some of the same models. Its raw
+output is preserved in [baseline-2026-10-13/](baseline-2026-10-13/) with local paths
+stripped. It is not an A/B reference, for the reasons in the table below — and one
+point where an initial reading of it was wrong, which is worth keeping visible.
 
-| | October suite | this session (`perf-bench`) |
+| | October snapshot | this session (`perf-bench`) |
 |---|---|---|
 | prompt | 4959 tokens, fixed text | 9189 tokens, calibrated via `/tokenize` |
-| nonce placement | **end of prompt** | **start of prompt** |
-| prefix cache on the prefill pass | mostly replayed | `cache_n = 42` of 9230 |
+| prefix cache on the prefill pass | **cold — `cached_tokens = 0` on every row** | cold — `cache_n = 42` of 9230 |
 | repetitions | 1 | 3–5, median + spread |
 | timing source | wall clock | server `timings` |
+| engine version recorded | **no** | yes, per row (build + commit) |
+| server flags recorded | **no** — `meta.json` keeps only model-intrinsic fields | yes, per arm |
 | MTP counters | not recorded | `mtp_acc`, `draft_per_out` |
-| GPU evidence | none | peak util + VRAM per card, stored in the result |
-| generation length | 1024, mixed with prefill | 1024, decode-only pass |
+| GPU evidence | none | peak util + VRAM per card, in the result |
+| failed loads | stored as `null`, never retried (4/10 and 3/10 rows) | arm marked failed and retried |
 
-Representative October rows: `…-IQ3XXS-Sapphire` 485.7 prefill / 40.7 decode t/s
-(Vulkan), `…-IQ3XXS-C2` 835.3 / 33.8 (Vulkan), `…-IQ3XXL-ROCm-Sapphire` 197.8 /
-35.2. Five of its ten rows have `prompt_tps: null` — those models failed to load or
-timed out, and a single-repetition harness recorded the failure instead of retrying.
+**The correction.** The October harness placed its cache-busting nonce at the *end*
+of the prompt, which is a genuine methodology bug: llama.cpp matches the prefix from
+token 0, so a second pass over the same prompt would replay the entire body and
+report a fabricated prefill speed. It did **not** corrupt these particular numbers —
+each model was measured once against a freshly started server, and `cached_tokens = 0`
+confirms the pass was cold. So the October prefill figures are real measurements of a
+cold prefill. The bug is latent: it would have produced fiction the moment the harness
+started repeating runs, which is precisely what the current harness does. Hence nonce
+placement moved to the front of the prompt *before* repetitions were introduced.
 
-The end-nonce is the important part. llama.cpp's prefix cache matches from token 0,
-so a nonce at the end leaves the whole prompt body cached and the "prefill" number
-is mostly cache lookup. That is why October reports 197–835 t/s for the same class
-of model where this session measures 870–910 t/s on a genuinely cold 9 k prompt: the
-fast October rows are cache hits, not fast prefill. Keep the October data as a
-historical snapshot; never use it as an A/B reference.
+**What actually blocks comparison is attribution, not cache state.** The October rows
+carry no build and no flags — `meta.json` stores architecture, quant, `ctx` and
+device, but not the engine version, batch/ubatch, flash-attn or drafter settings. A
+40.7 t/s decode row therefore cannot be set against the 70.4 t/s measured here: the
+gap is a mixture of backend (October rows are mostly Vulkan, several with `ctk=q8_0`),
+drafter state (unknown, possibly disabled), engine build (unknown) and prompt length
+(4959 vs 9189 tokens, which alone moves decode by roughly 25 %). Those terms cannot be
+separated from this record, in either direction — it neither proves a regression nor
+proves an improvement.
+
+Keep the snapshot as history. Re-measure rather than compare against it.
 
 ---
 
@@ -401,8 +414,9 @@ mid-session. This is exactly why the file was edited here and *not* applied live
 4. **The Vulkan branch needs a clean A/B** with both arms' results saved and
    `reps` high enough that within-arm spread (12 % here) doesn't swallow the
    effect.
-5. **The October suite should not be re-run as-is.** If a historical comparison is
-   ever needed, re-measure with the new harness instead of repairing the old one.
+5. **The October snapshot is unattributable** (no build, no flags). If a historical
+   comparison is ever needed, re-measure that model list with the current harness
+   instead of trying to reconcile against the snapshot.
 
 ---
 

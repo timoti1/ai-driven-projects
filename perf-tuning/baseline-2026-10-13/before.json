@@ -1,0 +1,108 @@
+[
+ {
+  "model": "qwen3.8-27b-IQ3XXS-Uncensored-Sapphire",
+  "ctx": 150000,
+  "vram_used_mib": 16016.0,
+  "vram_free_mib": 288.0,
+  "total_mib": 16304.0,
+  "kv_mib": null,
+  "kv_per_tok": null,
+  "wall_s": 44.1,
+  "prompt_tokens": 4959,
+  "cached_tokens": 0,
+  "gen_tokens": 1024,
+  "prompt_tps": 485.7,
+  "gen_tps": 40.7
+ },
+ {
+  "model": "qwen3.8-27b-IQ3XXS-Uncensored-C2",
+  "ctx": 260000,
+  "vram_used_mib": 16016.0,
+  "vram_free_mib": 288.0,
+  "total_mib": 16304.0,
+  "kv_mib": null,
+  "kv_per_tok": null,
+  "wall_s": 43.7,
+  "prompt_tokens": 4959,
+  "cached_tokens": 0,
+  "gen_tokens": 1024,
+  "prompt_tps": 835.3,
+  "gen_tps": 33.8
+ },
+ {
+  "model": "qwen3.8-27b-Swift-1.5-IQ3_S-Uncensored-C2",
+  "ctx": 220000,
+  "vram_used_mib": 16017.0,
+  "vram_free_mib": 287.0,
+  "total_mib": 16304.0,
+  "kv_mib": null,
+  "kv_per_tok": null,
+  "wall_s": 63.9,
+  "prompt_tokens": 4959,
+  "cached_tokens": 0,
+  "gen_tokens": 1024,
+  "prompt_tps": 759.9,
+  "gen_tps": 31.3
+ },
+ {
+  "model": "qwen3.8-27b-Swift-1.5-IQ3_S-Uncensored-Sapphire",
+  "error": "timed out"
+ },
+ {
+  "model": "qwen3.8-27b-IQ3S-Q4-Sapphire",
+  "ctx": 170000,
+  "vram_used_mib": 104.0,
+  "vram_free_mib": 16200.0,
+  "total_mib": 16304.0,
+  "kv_mib": null,
+  "kv_per_tok": null,
+  "wall_s": 77.1,
+  "prompt_tokens": 4959,
+  "cached_tokens": 0,
+  "gen_tokens": 1024,
+  "prompt_tps": 440.6,
+  "gen_tps": 22.0
+ },
+ {
+  "model": "qwen3.8-27b-IQ3XXL-Sapphire",
+  "error": "timed out"
+ },
+ {
+  "model": "qwen3.8-27b-IQ3XXS-Q8-Sapphire",
+  "ctx": 128000,
+  "vram_used_mib": 104.0,
+  "vram_free_mib": 16200.0,
+  "total_mib": 16304.0,
+  "kv_mib": null,
+  "kv_per_tok": null,
+  "wall_s": 40.4,
+  "prompt_tokens": 4959,
+  "cached_tokens": 0,
+  "gen_tokens": 1024,
+  "prompt_tps": 419.1,
+  "gen_tps": 46.1
+ },
+ {
+  "model": "tiel-coder-35b-a3b-Sapphire",
+  "error": "timed out"
+ },
+ {
+  "model": "qwen3.8-27b-IQ3S-ROCm-Sapphire",
+  "error": "HTTP Error 500: Internal Server Error"
+ },
+ {
+  "model": "qwen3.8-27b-IQ3XXL-ROCm-Sapphire",
+  "ctx": 140000,
+  "vram_used_mib": 104.0,
+  "vram_free_mib": 16200.0,
+  "total_mib": 16304.0,
+  "kv_mib": 3625.0,
+  "kv_per_tok": 29696.0,
+  "wall_s": 62.3,
+  "prompt_tokens": 4959,
+  "cached_tokens": 0,
+  "gen_tokens": 1024,
+  "prompt_tps": 197.8,
+  "gen_tps": 35.2
+ }
+]
