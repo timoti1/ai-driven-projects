@@ -911,8 +911,13 @@ def parse_line(line, js):
     if "eval time" in line:
         m = RE_EVAL.search(line)
         if m:
-            js["gen_final"] = float(m.group(1)); js["gen_final_at"] = now
-            _sample_tg(js, js["gen_final"])
+            v = float(m.group(1))
+            if 0 < v <= TG_MAX:
+                js["gen"] = v
+                js["gen_at"] = now
+                js["gen_line"] = line[:140]
+            js["gen_final"] = v; js["gen_final_at"] = now
+            _sample_tg(js, v)
             js["last_activity"] = now
             return
     if "draft acceptance" in line:

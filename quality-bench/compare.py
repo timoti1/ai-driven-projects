@@ -1,11 +1,12 @@
 """Aggregate all bench/results/results_*.json into one comparison table.
 
 Fixed total width = 226 chars. The file column shows the GGUF filename recorded in the run meta
-(auto-resolved by run.sh); older runs fall back to model_files.json.
-Meta columns: Ctx = context window in use (k tokens), Cmp = auto-detected context compactions,
+(auto-resolved by run.sh); older runs fall back to model_files.json. Long names and notes are
+truncated with an ellipsis.
+Meta columns: Ctx = context window in use (k/M shorthand), Cmp = auto-detected context compactions,
 Seed = generation seed pinning sampling ("-" = random).
 """
-import json, os, glob
+import json, os, glob, re
 
 OUT = os.path.dirname(os.path.abspath(__file__))
 BENCHES = ["MMLU", "GSM8K", "HellaSwag", "ARC-Chall", "MATH",
@@ -64,6 +65,36 @@ def fmt_time(t):
     return f"{t:.1f}s"
 
 
+MULT = {"": 1, "k": 10**3, "m": 10**6, "g": 10**9, "t": 10**12}
+
+
+def ctx_tokens(v):
+    """Context size as int tokens; accepts 128k / 1.0M shorthand, None if unparseable."""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip().lower().replace(",", "").replace("_", "").replace(" ", "")
+    m = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([kmgt]?)[i]?b?", s)
+    if not m:
+        return None
+    return int(float(m.group(1)) * MULT[m.group(2)])
+
+
+def fmt_ctx(v):
+    """Ctx cell; unparseable values are shown verbatim rather than crashing the table."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return "-"
+    n = ctx_tokens(v)
+    if n is None:
+        return str(v)
+    if n <= 0:
+        return "-"
+    if n >= 10**6:
+        return f"{n / 10**6:.1f}M"
+    return f"{n // 1000}k" if n >= 1000 else str(n)
+
+
 def load_meta(model):
     fp = os.path.join(OUT, "meta", f"meta_{model}.json")
     if os.path.exists(fp):
@@ -110,8 +141,7 @@ def main():
             row += f"{v['acc']:>{BENCH_W - 1}.1f}%" if v else f"{'-':>{BENCH_W}s}"
         row += f"{d['overall']['acc']:>{OVERALL_W - 1}.1f}%"
         row += f"{fmt_time(load_timing(run_name, d)):>{TIME_W}s}"
-        ctx = meta.get("context_size")
-        row += f"{(f'{ctx // 1000}k' if ctx else '-'):>{CTX_W}s}"
+        row += f"{fmt_ctx(meta.get('context_size')):>{CTX_W}s}"
         cmp_ = meta.get("compactions")
         row += f"{(str(cmp_) if cmp_ is not None else '-'):>{CMP_W}s}"
         seed = meta.get("seed")
