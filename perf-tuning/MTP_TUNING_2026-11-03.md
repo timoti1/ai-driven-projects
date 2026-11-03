@@ -23,8 +23,11 @@ configuration is now live. Companion tooling lives in
   4 of 10 rows null. Its prefill *was* genuinely cache-cold (`cached_tokens = 0`
   on every row), so the numbers are real for what they measured — they are just
   unattributable. See [baseline-2026-10-13/](baseline-2026-10-13/).
-- The MoE engine update 386 commits ahead is **blocked** for long-prompt work: a
-  multi-ubatch prefill bug zeroes MTP acceptance. See *Open items*.
+- The MoE engine update 386 commits ahead is **not yet evaluated**, not "blocked":
+  every measurement that showed zero acceptance came from a test instance started by
+  a defective script, and the old-vs-new comparison also moved the compiler. Treat
+  the "multi-ubatch bug" as an unconfirmed hypothesis. See *Open items* and
+  [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md).
 
 ---
 
@@ -48,7 +51,11 @@ signal and go stale.
 |---|---|---|---|
 | `rdna-boosts` (llama.cpp fork) | `0.7.0-dev` b11903, commit `efaa60db0` (`b11887-16-gefaa60db0`, fork revision "r206") | GCC 13.3.0 | the 27B model under test; **updated r191 → r206 during this session** |
 | Avalon (llama.cpp fork) | `0.6.0-dev` build 1, commit `9617344db` | Clang 24.0.0 | MoE engine, second card |
-| Avalon, 386 commits ahead | `0.8.0-dev` | GCC 13.3.0 | built locally, **not usable** — see *Open items* |
+| Avalon, 386 commits ahead | `0.8.0-dev` build 0, `commit unknown` | GCC 13.3.0 | built locally; superseded by a rebuild with the production toolchain — see *Open items* |
+| Avalon, 386 commits ahead, rebuilt | `0.8.0-dev`, commit `6cc179c6c` | Clang 24.0.0 | built to match production; **not yet measured** |
+
+How each of these was configured, and why the compiler row is part of the result
+rather than a footnote, is in [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md).
 | upstream llama.cpp | `0.4.1-dev` build 176, commit `4ff829e` | GCC 13.3.0 | reference build, not used for tuning |
 
 Avalon build flags (from `CMakeCache.txt`) — kernel selection depends on these,
@@ -317,6 +324,21 @@ known.
 This is why `mtp_acc` is recorded on every decode row: a decode number without an
 acceptance rate cannot distinguish a better drafter from a broken one.
 
+**Attribution of those runs, checked afterwards.** Every zero-acceptance file in the
+bench directory targets `127.0.0.1:5801` — the hand-started test instance — and none
+targets the production port. The log of that instance opens with:
+
+```
+run_avalon.sh: line 5: GGML_CUDA_MOE_TAIL_SKIP=7: command not found
+```
+
+i.e. the launcher died on its environment line before starting the server with the
+intended profile. So these runs establish the *symptom* (drafts proposed, nothing
+accepted, plain-autoregressive decode) but they do **not** establish that the cause
+lives in the engine revision: the instance that produced them was misconfigured, and
+the same `ctx_dft pos_max` warning appears in the production log as well. The
+multi-ubatch explanation remains a hypothesis, not a finding.
+
 ### 6. MoE expert tail-skip (quality/speed knob, for context)
 
 `MOE_TAIL_SKIP` defaults to 7 on this engine (experts of rank ≥ 7 are skipped).
@@ -400,11 +422,15 @@ mid-session. This is exactly why the file was edited here and *not* applied live
 
 ## Open items
 
-1. **MoE engine 386 commits ahead is blocked for long-prompt work.** Multi-ubatch
-   prefill interacts badly with MTP: acceptance collapses to 0 (see §5) and the new
-   binary is slower than the old on the same model and flags. Any future update of
-   this engine must be A/B'd at both ~2 k and ~9 k prompts before adoption — the
-   short-prompt path looked fine and hid the bug.
+1. **MoE engine 386 commits ahead: unmeasured, not blocked.** The earlier verdict
+   ("blocked — a multi-ubatch prefill bug zeroes acceptance, and the new binary is
+   slower") does not survive inspection: the zero-acceptance runs all came from a
+   test instance whose launcher script failed on its environment line (§5), the old
+   binary emits the same `ctx_dft pos_max` warning, and the speed comparison changed
+   the host compiler at the same time as the source. A clean rebuild with the
+   production toolchain (`6cc179c6c`, Clang 24.0.0) exists and needs an A/B at both
+   ~2 k and ~9 k prompts, from a launcher that is verified to have started the
+   intended profile. Until then no claim about this revision's quality is supported.
 2. **Prefill needs `reps=5` on MoE models.** `reps=3` produced 667 vs 970 t/s for
    an identical configuration. The spread gate flags it; it does not fix it.
 3. **Untested fork features.** `--spec-draft-mtp-vocab N` (block 13, draft
