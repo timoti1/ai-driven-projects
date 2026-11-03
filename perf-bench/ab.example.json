@@ -1,0 +1,36 @@
+{
+  "_comment": "Copy to ab.<site>.json (gitignored) and fill in. Templates are shell lines; {port} {name} {log} {model} {host} are substituted, everything else (including curl's %{http_code}) is left alone.",
+  "endpoint": {
+    "scheme": "http",
+    "host": "SERVER-HOST-OR-IP",
+    "port": 5806,
+    "model": "MODEL-ID-as-served-by-that-port"
+  },
+  "port": 5806,
+  "prompt_tokens": 8000,
+  "ready_timeout": 420,
+  "arms": [
+    {
+      "name": "spec-n3",
+      "args": "--spec-draft-n-max 3",
+      "launch": "ssh user@SERVER-HOST-OR-IP 'nohup env HIP_VISIBLE_DEVICES=0 llama-server -m /path/model-MTP.gguf --device ROCm0 -ngl 99 --port {port} --spec-type draft-mtp --spec-draft-n-max 3 > /tmp/{log}.log 2>&1 & echo $!'",
+      "ready": "ssh user@SERVER-HOST-OR-IP \"curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:{port}/health\"",
+      "version": "ssh user@SERVER-HOST-OR-IP 'curl -s http://127.0.0.1:{port}/props'",
+      "teardown": "ssh user@SERVER-HOST-OR-IP 'pkill -f -- --port.{port} || true'"
+    },
+    {
+      "name": "spec-n4-pmin0.5",
+      "args": "--spec-draft-n-max 4 --spec-draft-p-min 0.5",
+      "launch": "ssh user@SERVER-HOST-OR-IP 'nohup env HIP_VISIBLE_DEVICES=0 llama-server -m /path/model-MTP.gguf --device ROCm0 -ngl 99 --port {port} --spec-type draft-mtp --spec-draft-n-max 4 --spec-draft-p-min 0.5 > /tmp/{log}.log 2>&1 & echo $!'",
+      "ready": "ssh user@SERVER-HOST-OR-IP \"curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:{port}/health\"",
+      "version": "ssh user@SERVER-HOST-OR-IP 'curl -s http://127.0.0.1:{port}/props'",
+      "teardown": "ssh user@SERVER-HOST-OR-IP 'pkill -f -- --port.{port} || true'"
+    }
+  ],
+  "interference": {
+    "name": "second-engine-saturated",
+    "start": "ssh user@SERVER-HOST-OR-IP 'cd /path/to/perf-bench && nohup python3 hammer.py --host 127.0.0.1 --port 8080 --model OTHER-MODEL --concurrency 2 --max-tokens 512 --duration 600 > /tmp/{log}.log 2>&1 & echo $!'",
+    "stop": "ssh user@SERVER-HOST-OR-IP 'pkill -f hammer.py || true'",
+    "warmup_s": 25
+  }
+}

@@ -17,7 +17,7 @@ from lib import report  # noqa: E402
 from lib import util  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BUILTIN_TESTS = ["health", "prefill", "decode", "kv-cache", "full"]
+BUILTIN_TESTS = ["health", "prefill", "decode", "kv-cache", "spec-decode", "full"]
 USAGE_NOTE = (
     "Nothing to test: no target/model/tests were given and no config file was found.\n"
     "Point --target/--host/--model at a server and pick tests, or create a config file\n"
@@ -64,6 +64,7 @@ def build_parser():
     p.add_argument("--tag", help="label for this run (used in summaries)")
     p.add_argument("--depths", help="override context depths for tg/kv tests, e.g. 1024,8192,32768")
     p.add_argument("--pp-sizes", help="override prefill sizes, e.g. 512,2048,8192")
+    p.add_argument("--prompt-tokens", dest="prompt_tokens", help="prompt size for spec-decode (default 8000)")
     p.add_argument("--out", help="results directory (default ./results)")
     p.add_argument("--gpu", choices=["auto", "off"], help="probe local GPU stats around the run")
     p.add_argument("--repeat", type=int, help="repeat count per measurement (default 3)")
@@ -182,6 +183,9 @@ def main():
     timeout = args.timeout or int(cfg.get("timeout", 600))
     depths = [int(x) for x in (args.depths or cfg.get("depths", "1024,8192,32768")).split(",") if x]
     pp_sizes = [int(x) for x in (args.pp_sizes or cfg.get("pp_sizes", "512,2048,8192")).split(",") if x]
+    prompt_tokens = int(args.prompt_tokens or cfg.get("prompt_tokens", 8000))
+    params = {"depths": depths, "pp_sizes": pp_sizes, "prompt_tokens": prompt_tokens,
+              "repeat": repeat, "force_depths": bool(args.depths), "force_pp": bool(args.pp_sizes)}
     rows = []
 
     if args.llama_bench:
@@ -197,12 +201,11 @@ def main():
             gpu_snap = util.gpu_snapshot(gpu_mode)
             for suite_name, suite in suites:
                 for name, spec in (suite.get("cases") or {}).items():
-                    for r in range(repeat):
-                        for row in pr.run_case(name, suite_name, t["model"], spec,
-                                               {"depths": depths, "pp_sizes": pp_sizes,
-                                                "force_depths": bool(args.depths), "force_pp": bool(args.pp_sizes)}):
+                    for r in range(1 if spec.get("type") == "spec-decode" else repeat):
+                        for row in pr.run_case(name, suite_name, t["model"], spec, params):
                             row["tag"], row["run_id"], row["target"], row["model"] = tag, run_id, pr.base, t["model"]
                             row.setdefault("gpu", gpu_snap)
+                            row.setdefault("repeat", r + 1)
                             rows.append(row)
                             util.log("  " + report.fmt_row(row))
             util.merge_gpu(rows, util.gpu_snapshot(gpu_mode), gpu_snap)

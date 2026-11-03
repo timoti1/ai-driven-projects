@@ -1,0 +1,6 @@
+{
+ "description": "Long-context decode with speculative decoding fully accounted for: cache-cold prefill (front nonce), cache-warm decode, MTP acceptance rate.",
+ "cases": {
+  "spec": {"type": "spec-decode", "prompt_tokens": 8000, "tokens": 1024, "reps": 3, "cache": "warm", "chars_per_token": 4}
+ }
+}

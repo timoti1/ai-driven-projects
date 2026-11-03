@@ -1,6 +1,12 @@
 __pycache__/
 presets/targets.json
+ab.*.json
+!ab.example.json
+perf-bench.*.json
 results/*.json
 results/runs.csv
 results/summary.md
 perf-bench.json
+
+# local run artefacts
+*.err

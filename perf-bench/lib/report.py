@@ -5,11 +5,13 @@ import json
 import os
 
 FIELDS = ["ts", "tag", "run_id", "target", "model", "test", "phase", "depth",
-          "metric", "value", "first_token_s", "detail", "gpu_delta_mb"]
+          "metric", "value", "first_token_s", "detail", "gpu_delta_mb",
+          "repeat", "variant", "engine"]
 
 
 def fmt_row(r):
-    return (f"{r['test']:<28} d={r['depth']:<6} {r['metric']}={r['value']:<8} "
+    var = f" [{r['variant']}]" if r.get("variant") else ""
+    return (f"{r['test']:<28}{var} d={r['depth']:<6} {r['metric']}={r['value']:<8} "
             f"{r.get('detail', '')}")
 
 

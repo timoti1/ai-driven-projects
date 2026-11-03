@@ -6,6 +6,21 @@ import subprocess
 import sys
 
 
+def force_utf8():
+    """Make console output safe on Windows codepages (cp1251/cp1252/cp437).
+
+    Report text contains markers like a warning sign; printing them through a
+    legacy OEM codepage raises UnicodeEncodeError and kills the run *after* the
+    measurements are done. Reconfiguring the streams is the one-line fix.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def die(msg, code=2):
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(code)
@@ -74,3 +89,7 @@ def merge_gpu(rows, after, before):
                 if isinstance(v, dict) and isinstance(b, dict) and "used_mb" in v and "used_mb" in b:
                     deltas[k] = round(v["used_mb"] - b["used_mb"], 1)
             r["gpu_delta_mb"] = deltas
+
+
+# Applied at import so every entry point inherits UTF-8-safe console output.
+force_utf8()

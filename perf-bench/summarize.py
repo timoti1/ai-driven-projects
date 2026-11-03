@@ -6,7 +6,10 @@ import os
 import statistics
 import sys
 
-COLS = ["tag", "model", "target"]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from lib import util  # noqa: F401  - importing applies force_utf8() (cp1251 consoles)
+
+COLS = ["tag", "model", "target", "variant"]
 
 
 def main():
@@ -45,15 +48,22 @@ def main():
            "|---|---|---|---|" + "---|" * len(labels)]
     for key in sorted(keys):
         test, phase, depth, metric = key
-        vals = ["**%.1f**" % max(v) for v in cells[key].get(l, [])] or ["-"]
         cells_key = cells[key]
         cols = []
         for l in labels:
             vs = cells_key.get(l)
-            cols.append("%.1f" % statistics.median(vs) if vs else "")
-        best = max((max(vs) for vs in cells_key.values()), default=0)
-        cols = [("**%.1f**" % float(c.strip("*")) if c and float(c.strip("*")) == best else c) for c in cols]
+            if not vs:
+                cols.append("")
+                continue
+            med = statistics.median(vs)
+            sp = (max(vs) - min(vs)) / med * 100 if med else 0
+            # >10% spread across reps: the number is not trustworthy yet
+            cols.append("%.1f" % med + (" ⚠" if sp > 10 and len(vs) > 1 else ""))
+        best = max((max(vs) for vs in cells_key.values() if vs), default=0)
+        cols = [("**%.1f**" % float(c.strip("* ")) if c and float(c.strip("* ⚠")) == best else c) for c in cols]
         out.append(f"| {test} | {phase} | {depth} | {metric} | " + " | ".join(cols) + " |")
+    out.append("\n`⚠` - spread over 10% between repetitions: raise `--reps`, or look for")
+    out.append("contention from another workload before trusting the number.")
     text = "\n".join(out) + "\n"
     print(text)
     path = args.out or os.path.join(os.path.dirname(os.path.abspath(args.csv)), "summary.md")
