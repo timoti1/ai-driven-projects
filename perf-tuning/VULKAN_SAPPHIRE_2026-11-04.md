@@ -13,10 +13,12 @@ tooling: [`../perf-bench`](../perf-bench). Related:
   (budget below). The 300k / parallel-2 configuration of the *same weights* does
   **not** fit — it is over budget by roughly 0.7–1.7 GiB, and that is the entry
   where the spill intuition is correct.
-- **The dominant gap is structural, not placement-related.** The Vulkan backend's
-  gated-delta-net kernel is a *serial per-token recurrence in all-f32*. The HIP
-  path has *chunked* GDN kernels on the RDNA4 matrix units. For a hybrid model
-  where 48 of 64 layers are GDN, that is the prefill bottleneck.
+- **The dominant gap is structural, not placement-related — now measured.** On
+  the same card with the same PCIe link, Vulkan prefill is 24 % slower than HIP
+  (730 vs 963 t/s). The Vulkan backend's gated-delta-net kernel is a *serial
+  per-token recurrence in all-f32*; the HIP path has *chunked* GDN kernels on
+  the RDNA4 matrix units. For a hybrid model where 48 of 64 layers are GDN, that
+  is the prefill bottleneck. See §4 for the full A/B table.
 - **Flash attention silently self-disables** in one observed Vulkan run: the
   auto-FA probe found the fused op landing on CPU and turned FA off. This happened
   with `auto`, and it is invisible unless you read the log.
@@ -137,7 +139,54 @@ The all-f32 requirement also inflates compute buffers on those 48 layers, which 
 why the free-VRAM margin on this model is thinner under Vulkan than the weights
 alone suggest.
 
-## 4. PCIe: the card really is behind a slow bridge
+## 4. Measured: Vulkan vs HIP on the same card (2026-11-04)
+
+With the chipset-attached card occupied by a live session and the CPU-attached
+card freed, a controlled A/B was run on the CPU-attached card (`Vulkan1` /
+`ROCm0`, full x16 Gen4 end to end) using the same 27B IQ3_XXS weights, the same
+KV quantization, and flash attention explicitly on for both arms.
+
+| Arm | Backend | Card | PCIe | Context | Prefill | Decode | MTP acc |
+|-----|---------|------|------|---------|---------|--------|---------|
+| A   | Vulkan  | Gigabyte | x16 Gen4 | 170 000 | 730 t/s | 68.7 t/s | 0.94 |
+| B   | HIP     | Gigabyte | x16 Gen4 | 120 000 | 963 t/s | 73.6 t/s | 0.57 |
+| C   | HIP     | Sapphire | x2 Gen3  | 120 000 | 970 t/s | ~70 t/s  | —     |
+| D   | Vulkan  | Sapphire | x2 Gen3  | 170 000 | 570 t/s | 54–60 t/s | —     |
+
+Arm D is the earlier, less clean run (one arm failed to start; see §1 #8).
+
+**What the numbers say:**
+
+1. **HIP is nearly PCIe-invariant on prefill.** Arm B (963 t/s) and arm C
+   (970 t/s) differ by 0.7 %, well inside run-to-run noise. The chunked GDN
+   kernels on the matrix units do not appear to be bandwidth-bound on this
+   prompt; the weights stay in VRAM and the compute is local.
+
+2. **Vulkan is PCIe-sensitive on prefill.** Arm A (730 t/s) is 28 % faster than
+   arm D (570 t/s) with the only change being the PCIe link. The serial f32
+   recurrence does move data across the bridge, and the x2 Gen3 link taxes it.
+
+3. **The backend gap survives equal PCIe.** On the same card, arm A (730 t/s)
+   is 24 % slower than arm B (963 t/s). This is the structural GDN gap, not a
+   placement artefact.
+
+4. **Decode is nearly flat.** 54–73 t/s across all four arms. The spread is
+   within the noise band established in
+   [MTP_TUNING_2026-11-03.md](MTP_TUNING_2026-11-03.md) for this model, and the
+   MTP acceptance rate varies more than the decode throughput does. Decode is
+   not the place to look for the Vulkan penalty.
+
+5. **HIP at 170 k context does not fit on a 16 GiB card** with this model. The
+   allocator aborted with 32 MiB free during a 178 MiB allocation. The 120 k
+   context (arm C's setting) works. Vulkan at 170 k fits (arm A), because the
+   Vulkan path's compute buffers are smaller than the HIP path's for the same
+   model and context.
+
+**Residency probe (arm A, Vulkan, Gigabyte, 170 k):** flash attention enabled
+(not self-disabled), 66/66 layers on GPU, KV buffer 2 992 MiB (2.92 GiB),
+recurrent state on GPU for all layers, no spill signals. The model is resident.
+
+## 5. PCIe: the card really is behind a slow bridge
 
 Enumerated topology, both cards:
 
@@ -155,7 +204,7 @@ That last clause is what makes FA and CPU-assigned ops dangerous here: a fused o
 that lands on CPU is not merely slower per se, it moves data across a ~2 GB/s link on
 every token.
 
-## 5. Ranked actions
+## 6. Ranked actions
 
 1. **Do not chase KV placement for the 170k entry.** Confirm residency from the load
    log instead (see the probe below), then move on.
@@ -177,14 +226,17 @@ every token.
    previously observed transient state made prefill ~4.7× slower and cleared only on
    reboot. If a Vulkan number looks absurdly bad, reboot before analyzing it.
 
-## 6. What is still unmeasured
+## 7. What is still unmeasured
 
 Stated as gaps, because several of them have previously been filled by assumption
 and then corrected:
 
-- No controlled Vulkan-vs-HIP A/B on the *same* card, same model, same context, same
-  repetition count. The existing Vulkan rows come from a run whose comparison arm
-  never started.
+- ~~No controlled Vulkan-vs-HIP A/B on the *same* card~~ — done, §4. The
+  context sizes differ (170 k vs 120 k) because HIP does not fit at 170 k on a
+  16 GiB card; the prefill gap is large enough that the context difference does
+  not change the conclusion.
+- Vulkan and HIP prefill on the *same* context size (both at 120 k, or both at
+  170 k with a smaller KV quant for HIP).
 - `RS buffer size`, `KV buffer size`, `model buffer size`, and compute-buffer sizes
   for the Vulkan path are **not** captured anywhere. The budget above is arithmetic
   from GGUF metadata, not a measured allocation report.
@@ -195,7 +247,7 @@ and then corrected:
 - The Vulkan GDN cost itself, isolated: it has not been measured by toggling the
   fused GDN op.
 
-## 7. Measurement plan
+## 8. Measurement plan
 
 Run order matters: each arm needs the card to itself, and both cards are currently
 occupied by live sessions. The probe script is
