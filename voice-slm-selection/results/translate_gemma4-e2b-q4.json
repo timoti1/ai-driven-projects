@@ -1,0 +1,26 @@
+[
+ {
+  "tag": "EN->RU",
+  "src": "The server crashed again, but this time it was a power issue, not the driver.",
+  "out": "Сервер снова упал, но на этот раз это была проблема с питанием, а не с драйвером.",
+  "sec": 2.5
+ },
+ {
+  "tag": "RU->EN",
+  "src": "Сервер снова упал, но на этот раз причина в питании, а не в драйвере.",
+  "out": "The server crashed again, but this time the cause is power, not the driver.",
+  "sec": 3.3
+ },
+ {
+  "tag": "EN->RU",
+  "src": "Could you check the Kafka topic? The consumer lag has been growing since the last deploy.",
+  "out": "Проверьте тему Kafka. Задержка потребителя увеличивается с момента последнего развертывания.",
+  "sec": 3.5
+ },
+ {
+  "tag": "RU->EN",
+  "src": "Проверь топик Kafka, у потребителя растёт лаг после последнего деплоя.",
+  "out": "Check the Kafka topic, the consumer's lag is growing after the last deployment.",
+  "sec": 3.3
+ }
+]
