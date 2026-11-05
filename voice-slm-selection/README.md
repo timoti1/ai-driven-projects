@@ -99,7 +99,7 @@ the judge's per-case resolution). See the
 [Model-weight quantization](#model-weight-quantization-5-bit-vs-4-bit) chapter.
 
 - Model file: `/media/timoti/Data/lmstudio/models/unsloth/Qwen3.5-4B-GGUF/Qwen3.5-4B-Q4_K_M.gguf`
-- Engine: `/home/timoti/Downloads/ik-llama.cpp/build-cpu/bin/llama-server`
+- Engine: `/home/timoti/Downloads/ik-llama.cpp/build-cpu-opt/bin/llama-server` (LTO-optimized, commit 656036d9)
 - Flags: `--host 0.0.0.0 --port 5899 --ctx-size 16384 -t 8 --threads-batch 8
   --batch-size 512 --ubatch-size 256 -fa on --jinja -rea off --parallel 1
   --mlock --temp 0.3 -ctk q4_0 -ctv q4_0 --metrics`
@@ -279,6 +279,38 @@ the model or its size. This chapter records the plan and the state.
 - `data/cases.json` — the 12-case test set with gold meanings.
 - `results/` — raw outputs, judged scores, translation results, and the
   KV-quantization A/B (`raw_kv-f16.json`, `raw_kv-q4.json`, `judged_kv.json`).
+
+## Engine optimization (ik-cpu-llama rebuild)
+
+The `ik-cpu-llama` fork was updated from commit `a540dff` to `656036d9`
+(~252 commits) and rebuilt with LTO (`-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON`)on top of the existing `GGML_NATIVE=ON` (which already enabled AVX2/FMA/F16C/BMI2 via `-march=native`).
+
+### Build command
+```bash
+cd /home/timoti/Downloads/ik-llama.cpp
+git reset --hard origin/main
+cmake -B build-cpu-opt -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_NATIVE=ON -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+  -DGGML_CUDA=OFF -DGGML_METAL=OFF -DGGML_VULKAN=OFF -DLLAMA_CURL=OFF
+cmake --build build-cpu-opt -j16
+```
+
+### A/B benchmark (Qwen3.5-4B Q4_K_M, same flags, warmup + 5 runs)
+
+| Metric | Old binary (`build-cpu`) | New binary (`build-cpu-opt`) | Δ |
+|---|---|---|---|
+| Generation (t/s, median) | 13.04 | 13.38 | +2.6% |
+| Prompt-eval (t/s, 4049-token prompt) | 83.53 | **96.64** | **+15.7%** |
+| Prompt-eval wall time (4049 tok) | 48.47 s | 41.90 s | −13.6% |
+
+The prompt-eval gain is significant: it is the dominant latency when context
+grows (long transcripts, multi-turn). Generation improved modestly (~3%).
+
+### Deployment
+- Binary: `/home/timoti/Downloads/ik-llama.cpp/build-cpu-opt/bin/llama-server`
+- Unit file updated: `ExecStart` → `build-cpu-opt/bin/llama-server`
+- Old build kept at `build-cpu/` for rollback.
+- Backup of unit file: `/tmp/qwen35-4b-cpu.service.bak.*`
 
 ## Reproduce
 
