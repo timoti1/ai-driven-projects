@@ -283,12 +283,22 @@ non-autoregressive → fast on CPU, ~2.50% WER vs Piper's 4.38%):
   `~/.cicero/config.yaml`.
 - kokoro-ru RTF ~0.10 on CPU (8 threads).
 
-### Thinking-leak fix (`/no_think`)
+### Thinking-leak fix (`/no_think` + context-restore + TTS strip)
 
 Qwen3.5-4B is a thinking model. With `llama-server -rea off` it still verbalized its reasoning as
 plain text — every reply opened with "Hmm, thinking", "Let me see", "Give me a second", "One
-moment" — and TTS spoke all of it. Added `/no_think` to the server system prompt
-(`~/.local/state/qwen35-4b-cpu/system_prompt.txt`); replies now start directly with the answer.
+moment" — and TTS spoke all of it. Three layers, because one wasn't enough:
+
+1. **`/no_think` in the server system prompt** (`~/.local/state/qwen35-4b-cpu/system_prompt.txt`) —
+   stops the habit on fresh prompts, but not in a live conversation.
+2. **Context-restore priming (the real cause).** On daemon restart Cicero sends a
+   "Context restore after a restart" message that recaps the recent conversation — including the
+   model's own past dirty replies — and says "carry on as if there was no interruption." The model
+   imitated that recap's style, so the filler came back. Clearing `~/.cicero/web-voice/history.jsonl`
+   removes the dirty recap; with clean replies accumulating, the recap stays clean.
+3. **TTS-side strip (safety net).** `tts_server.py` `_clean()` now calls `_strip_filler()`, which
+   drops leading filler phrases ("Give me a second", "One moment", "Hmm, thinking", etc.) before
+   synthesis. So even if the model ever generates filler again, it's never spoken.
 
 ### Resulting layout
 
