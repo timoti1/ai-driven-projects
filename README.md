@@ -11,6 +11,9 @@ isolation. `master` holds all folders merged together.
 | `perf-bench` | LLM inference benchmark harness |
 | `pi` | pi client + llama-metrics extension |
 | `quality-bench` | Model quality benchmark suite (questions, sandboxes, scoring) |
+| `perf-tuning` | Inference tuning notes (Vulkan vs HIP, VRAM budget, build provenance) |
+| `voice-slm-selection` | Text SLM selection for the voice assistant (Qwen3.5-4B, quants, KV cache) |
+| `voice-assistant-selection` | Speech stack + assistant host selection (parakeet STT, terminal use) |
 
 ## Layout convention
 
