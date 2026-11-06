@@ -132,12 +132,38 @@ const state: {
   stats: Stats | null;
   downSince: number;
   busy: boolean;
+  session: {
+    startedAt: number | null;
+    endedAt: number | null;
+    active: boolean;
+    toolCalls: number;
+    toolFailures: number;
+    requests: number;
+    ppTime: number;
+    reqTime: number;
+    toolTime: number;
+    thinkTime: number;
+    ppStartAt: number | null;
+    reqStartAt: number | null;
+    ppMeasured: boolean;
+    lastDeltaType: string | null;
+    lastDeltaTime: number | null;
+    toolStart: Map<string, number>;
+  };
 } = {
   gpu: null,
   sys: null,
   stats: null,
   downSince: 0,
   busy: false,
+  session: {
+    startedAt: null, endedAt: null, active: false,
+    toolCalls: 0, toolFailures: 0, requests: 0,
+    ppTime: 0, reqTime: 0, toolTime: 0, thinkTime: 0,
+    ppStartAt: null, reqStartAt: null, ppMeasured: false,
+    lastDeltaType: null, lastDeltaTime: null,
+    toolStart: new Map(),
+  },
 };
 
 // ---- helpers ----
@@ -304,6 +330,49 @@ function buildHwStats(theme: any, gpu: Gpu, st?: StatsGpu): string[] {
   return parts;
 }
 
+// Session meters for the last user prompt: uptime, tool calls, provider requests.
+// Started on user input, frozen when the agent loop ends (no longer working).
+function fmtSecs(ms: number): string {
+  const total = Math.round(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${total}s`;
+}
+
+// A delta is a reasoning token if its type is thinking_start/_delta/_end.
+function isThinkingDelta(type: string | null | undefined): boolean {
+  return type != null && type.startsWith("thinking");
+}
+
+function buildSessionMeter(theme: any): string {
+  const dim = (s: string) => theme.fg("dim", s);
+  const se = state.session;
+  if (!se.startedAt) return "";
+  const now = Date.now();
+  const ended = se.active ? now : (se.endedAt ?? se.startedAt);
+  const up = fmtSecs(Math.max(0, ended - se.startedAt));
+  // Live values: add the in-flight portion of the active request so the
+  // numbers stream as tokens arrive. req grows as tokens stream; think grows
+  // as thinking tokens stream; pp grows during prefill. Without this, req is
+  // frozen until message_end and gen = req - think underflows to 0 mid-stream.
+  const livePP = se.ppTime + (se.ppStartAt != null ? now - se.ppStartAt : 0);
+  const liveReq = se.reqTime + (se.reqStartAt != null ? now - se.reqStartAt : 0);
+  const liveThink = se.thinkTime + (se.lastDeltaTime != null && isThinkingDelta(se.lastDeltaType) ? now - se.lastDeltaTime : 0);
+  const pp = fmtSecs(livePP);
+  const req = fmtSecs(liveReq);
+  const think = fmtSecs(liveThink);
+  const gen = fmtSecs(Math.max(0, liveReq - liveThink));
+  const tool = fmtSecs(se.toolTime);
+  // req = total generation window (reasoning + text + tool-call tokens).
+  // think = reasoning time (directly measured, a subset of req).
+  // gen = req - think = text + tool-call writing. tool = actual tool execution.
+  return `last prompt: ${dim("up")} ${up}  ${dim("(PP:")} ${pp}, ${dim("req/think/gen:")} ${req}/${think}/${gen}, ${dim("tool calls:")} ${tool})  ${dim("calls/failures")} ${se.toolCalls}/${se.toolFailures}  ${dim("req")} ${se.requests}`;
+}
+
+
 function buildSysLine(theme: any): string {
   const dim = (s: string) => theme.fg("dim", s);
   const s = state.sys;
@@ -363,7 +432,13 @@ function buildLines(theme: any, width: number): string[] {
 
   L.push("");
   const sysText = buildSysLine(theme);
-  if (sysText) L.push(truncateToWidth(sysText, width));
+  const meter = buildSessionMeter(theme);
+  if (sysText || meter) {
+    const sw = visibleWidth(sysText);
+    const mw = visibleWidth(meter);
+    const gap = Math.max(0, width - sw - mw);
+    L.push(truncateToWidth(sysText + " ".repeat(gap) + meter, width));
+  }
 
   return L;
 }
@@ -423,6 +498,127 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
+  // Per-prompt session meters: start on user input, freeze when the agent stops working.
+  pi.on("input", () => {
+    state.session = {
+      startedAt: Date.now(), endedAt: null, active: true,
+      toolCalls: 0, toolFailures: 0, requests: 0,
+      ppTime: 0, reqTime: 0, toolTime: 0, thinkTime: 0,
+      ppStartAt: null, reqStartAt: null, ppMeasured: false,
+      lastDeltaType: null, lastDeltaTime: null,
+      toolStart: new Map(),
+    };
+    requestRender();
+  });
+
+  pi.on("tool_call", () => {
+    if (!state.session.active) return;
+    state.session.toolCalls++;
+    requestRender();
+  });
+
+  pi.on("before_provider_request", () => {
+    if (!state.session.active) return;
+    state.session.requests++;
+    const now = Date.now();
+    state.session.ppStartAt = now;
+    state.session.ppMeasured = false;
+    requestRender();
+  });
+
+  // PP ends at the first assistant message_update — that is when the first
+  // token arrives after prefill. message_start fires too early (before prefill).
+  // Each inter-delta interval is attributed to the CURRENT delta's type: the
+  // time from the previous token to this one is how long THIS token took.
+  // Thinking deltas accumulate into thinkTime; the rest (text + tool-call
+  // tokens) is generation.
+  pi.on("message_update", (e) => {
+    if (!state.session.active) return;
+    if (e.message?.role !== "assistant") return;
+    const se = state.session;
+    const now = Date.now();
+    if (se.ppStartAt != null && !se.ppMeasured) {
+      se.ppTime += now - se.ppStartAt;
+      se.ppStartAt = null;
+      se.ppMeasured = true;
+    }
+    if (se.reqStartAt == null) {
+      se.reqStartAt = now;
+    }
+    if (se.lastDeltaTime != null && isThinkingDelta(e.assistantMessageEvent?.type)) {
+      se.thinkTime += now - se.lastDeltaTime;
+    }
+    se.lastDeltaTime = now;
+    se.lastDeltaType = e.assistantMessageEvent?.type ?? null;
+    requestRender();
+  });
+
+  pi.on("tool_execution_start", (e) => {
+    if (!state.session.active) return;
+    const se = state.session;
+    const now = Date.now();
+    se.toolStart.set(e.toolCallId, now);
+    requestRender();
+  });
+
+  pi.on("tool_execution_end", (e) => {
+    if (!state.session.active) return;
+    const se = state.session;
+    const now = Date.now();
+    const start = se.toolStart.get(e.toolCallId);
+    if (start != null) {
+      se.toolTime += now - start;
+      se.toolStart.delete(e.toolCallId);
+    }
+    if (e.isError) {
+      se.toolFailures++;
+    }
+    requestRender();
+  });
+
+  // message_end fires when the assistant message is fully rendered — generation is complete.
+  // Close the per-request timer and the final inter-delta interval.
+  pi.on("message_end", (e) => {
+    if (!state.session.active) return;
+    if (e.message?.role !== "assistant") return;
+    const se = state.session;
+    const now = Date.now();
+    if (se.lastDeltaTime != null && isThinkingDelta(se.lastDeltaType)) {
+      se.thinkTime += now - se.lastDeltaTime;
+    }
+    if (se.reqStartAt != null) {
+      se.reqTime += now - se.reqStartAt;
+      se.reqStartAt = null;
+    }
+    se.lastDeltaTime = null;
+    se.lastDeltaType = null;
+    requestRender();
+  });
+
+  pi.on("agent_end", () => {
+    if (!state.session.active) return;
+    state.session.active = false;
+    state.session.endedAt = Date.now();
+    const se = state.session;
+    const now = Date.now();
+    if (se.ppStartAt != null && !se.ppMeasured) {
+      se.ppTime += now - se.ppStartAt;
+      se.ppStartAt = null;
+    }
+    // Close the final inter-delta interval if the agent ended mid-stream.
+    if (se.lastDeltaTime != null && isThinkingDelta(se.lastDeltaType)) {
+      se.thinkTime += now - se.lastDeltaTime;
+    }
+    if (se.reqStartAt != null) {
+      se.reqTime += now - se.reqStartAt;
+      se.reqStartAt = null;
+    }
+    se.lastDeltaTime = null;
+    se.lastDeltaType = null;
+    for (const [, start] of se.toolStart) se.toolTime += now - start;
+    se.toolStart.clear();
+    requestRender();
+  });
   pi.on("session_start", (_e, ctx) => {
     cachedLines = null;
     if (ctx.mode !== "tui") return;
@@ -457,5 +653,13 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     if (timer) clearInterval(timer);
     timer = null;
+    state.session = {
+      startedAt: null, endedAt: null, active: false,
+      toolCalls: 0, toolFailures: 0, requests: 0,
+      ppTime: 0, reqTime: 0, toolTime: 0, thinkTime: 0,
+      ppStartAt: null, reqStartAt: null, ppMeasured: false,
+      lastDeltaType: null, lastDeltaTime: null,
+      toolStart: new Map(),
+    };
   });
 }

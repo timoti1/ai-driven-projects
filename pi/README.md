@@ -18,7 +18,7 @@ Gigabyte 9070: util 0%    63°C (67°C)  μC 59°C (73°C)  vram 70°C  15.2G/15
 Sapphire 9070: [TG] ▕·········▏ 0.0 t/s                 ▁▃█▄▁▁▁▁70+  n 500 μ 27  p95 38                                          [PP]                    0.0 t/s   ▃▂▁▁▁▄▆█700+  n 394 μ 591   p95 871
 Sapphire 9070: util 100%  45°C (50°C)  μC 49°C (59°C)  vram 48°C  15.5G/15.9G  60W  μW 116W  fan 0%
 
-CPU  util 0%  61°C  RAM 40.1G/62.7G  30W
+CPU  util 0%  61°C  RAM 40.1G/62.7G  30W                                                       up 2m 34s   (PP: 81s, req/think/gen: 25s/5s/20s, tool calls: 0s)   calls/failures 1/0   req 13
 ```
 
 - **[TG]** — token generation: live tok/s, MTP draft-acceptance %, a 70 tok/s
@@ -28,10 +28,62 @@ CPU  util 0%  61°C  RAM 40.1G/62.7G  30W
 - **Hardware line** — util, chip temp (session max), session-mean chip/hotspot
   temps, VRAM temp, VRAM used/total, power, session-mean power, fan.
 - **System line** — CPU util, CPU temp, RAM used/total, CPU package power.
+- **Bottom session line** — per-prompt metrics shown on the same line as the system metrics, right-aligned:
+  - `up` — elapsed time since the user prompt was submitted.
+  - `PP` — prompt processing time (prefill, from request start to first assistant token).
+  - `req/think/gen` — total provider request generation time / model reasoning time / generation time (text + tool-call writing). `req` includes reasoning + text + tool-call tokens; `think` is reasoning (a subset of `req`); `gen` = `req` − `think`.
+  - `tool calls` — cumulative time spent executing tool calls (actual tool execution, separate from `req`).
+  - `calls/failures` — number of tool calls and how many of them failed.
+  - `req` — number of provider (LLM) requests made during this prompt.
 
 Session aggregates (histograms, n/μ/p95, held display values, mean busy temps)
 are collected server-side while the GPU is busy, so the panel stays meaningful
 even between requests.
+
+## Session metrics (per prompt)
+
+The bottom line of the panel shows metrics for the current user prompt:
+
+- The metrics start counting when you submit a new prompt (the `input` event).
+- They freeze when the agent stops working (`agent_end` event).
+- Submitting a new prompt resets all counters to zero.
+
+Timing is tracked through pi events:
+
+| Event | What it does |
+|-------|-------------|
+| `input` | Resets all counters and starts the uptime timer.
+| `before_provider_request` | Starts the PP (prompt processing / prefill) timer.
+| `message_update` (assistant, first) | Stops PP timer, starts generation timer — fires on the first assistant token after prefill.
+| `message_update` (assistant) | Each inter-delta interval is attributed to the current delta's type: `thinking_delta` intervals accumulate into `thinkTime`; `text_delta` / `toolcall_delta` intervals are generation.
+| `tool_execution_end` | Adds the tool call duration to tool time; increments failures if `isError` is true.
+| `message_end` (assistant) | Stops the generation timer, closes the final inter-delta interval — fires after the full model response is rendered.
+| `agent_end` | Finalizes and freezes all metrics, closing any in-flight interval.
+
+`think` is measured directly from `thinking_delta` events (a subset of `req`), so `req = think + gen` always holds. Tool execution time is tracked separately and is not subtracted from `req`.
+
+PP + reqTime cover the full provider request: PP is prefill, reqTime is token generation (reasoning + text + tool-call tokens).
+
+The meter displays **live** values: `req`, `think`, and `pp` each include the in-flight portion of the active request, so they stream as tokens arrive. This keeps `gen = req − think` non-negative and consistent mid-stream (without it, `req` would stay frozen until `message_end` and `gen` would underflow to 0 while `think` is still growing).
+
+## Unit tests
+
+The extension's session meter logic is extracted into a pure, dependency-free
+module and covered by unit tests:
+
+- `tests/session.ts` — extracted session meter logic (no pi dependencies).
+- `tests/session.test.ts` — 46 unit tests covering counters, timing,
+  multiple requests, tool call tracking, tool failures, PP tracking,
+  thinking-time measurement, live streaming (no underflow), and the meter
+  string format.
+
+Run them with:
+
+```bash
+node --experimental-strip-types --test tests/session.test.ts
+```
+
+All tests pass.
 
 ## Repository layout
 
