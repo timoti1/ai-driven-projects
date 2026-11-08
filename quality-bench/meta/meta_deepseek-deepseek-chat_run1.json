@@ -1,0 +1,5 @@
+{
+ "notes": "openrouter deepseek test",
+ "context_size": 8192,
+ "seed": 1234
+}

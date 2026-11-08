@@ -1,0 +1,5 @@
+{
+ "notes": "openrouter nvidia/nemotron-3.5-lightning:free",
+ "context_size": "1.0M",
+ "seed": 1234
+}

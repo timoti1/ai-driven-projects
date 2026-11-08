@@ -1,0 +1,71 @@
+{
+  "model": "qwen3.8-flash-IQ3_S_int8-low4096",
+  "per_benchmark": {
+    "MMLU": {
+      "correct": 192,
+      "total": 200,
+      "acc": 96.0,
+      "time_s": 426.2
+    },
+    "GSM8K": {
+      "correct": 95,
+      "total": 100,
+      "acc": 95.0,
+      "time_s": 157.5
+    },
+    "HellaSwag": {
+      "correct": 188,
+      "total": 200,
+      "acc": 94.0,
+      "time_s": 386.7
+    },
+    "ARC-Chall": {
+      "correct": 197,
+      "total": 200,
+      "acc": 98.5,
+      "time_s": 284.1
+    },
+    "MATH": {
+      "correct": 69,
+      "total": 100,
+      "acc": 69.0,
+      "time_s": 333.1
+    },
+    "WinoGrande": {
+      "correct": 187,
+      "total": 200,
+      "acc": 93.5,
+      "time_s": 230.1
+    },
+    "BBH": {
+      "correct": 100,
+      "total": 100,
+      "acc": 100.0,
+      "time_s": 125.4
+    },
+    "HumanEval": {
+      "correct": 29,
+      "total": 30,
+      "acc": 96.67,
+      "time_s": 192.2
+    },
+    "Terminal": {
+      "correct": 50,
+      "total": 50,
+      "acc": 100.0,
+      "time_s": 190.8
+    },
+    "TermHard": {
+      "correct": 50,
+      "total": 50,
+      "acc": 100.0,
+      "time_s": 213.6
+    }
+  },
+  "overall": {
+    "correct": 1157,
+    "total": 1230,
+    "acc": 94.07,
+    "time_s": 2539.7
+  }
+}

@@ -1,0 +1,5 @@
+{
+ "notes": "q4_0, no mtp, 130K ctx",
+ "context_size": 130000,
+ "compactions": 3
+}

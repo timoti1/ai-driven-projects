@@ -1,0 +1,6 @@
+{
+ "notes": "q4_0/q4_0, 100k ctx",
+ "context_size": 100000,
+ "seed": 1234,
+ "model_file": "Nanbeige4.3-33B-GSQ-RCO-IQ2_M"
+}

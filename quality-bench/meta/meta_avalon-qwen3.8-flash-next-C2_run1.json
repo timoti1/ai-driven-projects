@@ -1,0 +1,5 @@
+{
+ "notes": "q4_0/q4_0, 100k ctx",
+ "context_size": 200000,
+ "seed": 1234
+}
