@@ -22,6 +22,15 @@ HTTP_PORT = 8090
 MCP_PORT = 8091
 SWAP_HOST = "127.0.0.1"
 SWAP_PORT = 8080
+SWAP_KEY = os.environ.get("LLAMA_SWAP_KEY", "").strip().strip('"').strip("'")
+
+
+def _swap_headers(extra=None):
+    """Headers for llama-swap calls; bearer key required when apiKeys are set."""
+    h = dict(extra or {})
+    if SWAP_KEY:
+        h["Authorization"] = "Bearer " + SWAP_KEY
+    return h
 
 
 def _load_config():
@@ -89,9 +98,18 @@ def _fetch_json(url, timeout=2.0):
     """GET a JSON doc from llama-swap. Fresh connection per call, bounded body:
     a hung, restarted, or half-dead upstream can never wedge us."""
     try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        req = urllib.request.Request(url, headers=_swap_headers({"Accept": "application/json"}))
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read(MAX_BODY))
+    except Exception:
+        return None
+
+
+def _fetch_text(url, timeout=1.0):
+    """GET a plain body (prometheus text); same bounded, fail-soft contract."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.read(MAX_BODY).decode("utf-8", "replace")
     except Exception:
         return None
 
@@ -721,6 +739,7 @@ RE_EVAL = re.compile(r"eval time.*?\(\s*[\d.]+\s+ms per token,\s*([\d.]+)\s+toke
 RE_DRAFT = re.compile(r"draft acceptance =\s*([\d.]+)")
 TG_MAX = 2000     # above this, a tg sample is timing garbage, not a real speed
 PP_MAX = 1_000_000
+HIST_BINS = 9     # session histogram bins; with the widths below: TG 0..90+, PP 0..900+
 RE_STRATA_GEN = re.compile(
     r"\[strata\].*?:\s*([\d,]+)\s+of\s+(?:max\s+([\d,]+)|budget\s+[\d,]+\s*\(max\s+[\d,]+\))"
     r"\s+tokens,\s*([\d.]+)\s+tok/s")
@@ -953,7 +972,7 @@ def _follow_model(model_id):
             # Connection: close: no keep-alive state to wedge across a model
             # reload; every cycle is a clean reconnect (replay is deduped).
             conn.request("GET", "/logs/stream/" + urllib.parse.quote(model_id),
-                         headers={"Connection": "close"})
+                         headers=_swap_headers({"Connection": "close"}))
             resp = conn.getresponse()
             if resp.status != 200:
                 resp.read(256)
@@ -1237,6 +1256,58 @@ def enrich_strata(js, port):
             js["mtp_at"] = now
 
 
+# ====================== ENGINE COUNTERS (live rates without logs) ======================
+RE_PROM = re.compile(r"^llamacpp:([a-z_]+)\s+([-\d.eE+]+)$", re.M)
+_backend_prev = {}  # model_id -> {"at": ms, "port": port, "<counter>": value}
+
+
+def poll_backend_metrics():
+    """Live tok/s from each engine's prometheus counters (/metrics).
+
+    Upstream llama.cpp logs its timing only when a request ends, so log-derived
+    rates stay silent through a long generation; these counters move every step."""
+    now = now_ms()
+    with _lock:
+        ports = {mid: info["port"] for mid, info in _running.items()
+                 if info.get("state") == "ready"}
+        streams = {mid: e["js"] for mid, e in _streams.items()}
+    for mid, port in ports.items():
+        js = streams.get(mid)
+        if js is None:
+            continue
+        text = _fetch_text(f"http://{SWAP_HOST}:{port}/metrics")
+        if not text or "llamacpp:" not in text:
+            continue
+        cur = {k: float(v) for k, v in RE_PROM.findall(text)}
+        prev = _backend_prev.get(mid)
+        _backend_prev[mid] = dict(cur, at=now, port=port)
+        if prev is None or prev.get("port") != port:
+            continue  # engine reloaded: the first sample is only a baseline
+        if not 0.2 <= (now - prev["at"]) / 1000.0 <= 10.0:
+            continue
+        # Engine-side elapsed seconds: the rate ignores poll jitter.
+        dgen = cur.get("tokens_predicted_total", 0) - prev.get("tokens_predicted_total", 0)
+        dgen_s = cur.get("tokens_predicted_seconds_total", 0) - prev.get("tokens_predicted_seconds_total", 0)
+        dpp = cur.get("prompt_tokens_total", 0) - prev.get("prompt_tokens_total", 0)
+        dpp_s = cur.get("prompt_seconds_total", 0) - prev.get("prompt_seconds_total", 0)
+        if dgen > 0 and dgen_s > 0:
+            js["gen"] = min(TG_MAX, dgen / dgen_s)
+            js["gen_at"] = now
+            js["last_activity"] = now
+        if dpp > 0 and dpp_s > 0:
+            js["pp"] = min(PP_MAX, dpp / dpp_s)
+            js["pp_at"] = now
+            js["last_activity"] = now
+        dacc = cur.get("spec_decode_num_accepted_tokens_total", 0) - prev.get("spec_decode_num_accepted_tokens_total", 0)
+        ddraft = cur.get("spec_decode_num_draft_tokens_total", 0) - prev.get("spec_decode_num_draft_tokens_total", 0)
+        if ddraft > 0 and dacc > 0:
+            js["mtp"] = min(100.0, dacc / ddraft * 100.0)
+            js["mtp_valid"] = True
+            js["mtp_at"] = now
+    for mid in [m for m in _backend_prev if m not in ports]:
+        _backend_prev.pop(mid, None)
+
+
 # ====================== MERGE + PUBLISH ======================
 def merge_perf():
     """Publish per-GPU realtime metrics from per-model streams into perf."""
@@ -1344,6 +1415,10 @@ def swap_monitor():
         if t - last_run >= RUNNING_POLL_S:
             poll_running()
             last_run = t
+        try:
+            poll_backend_metrics()
+        except Exception:
+            pass
         merge_perf()
         time.sleep(MERGE_S)
 
@@ -1433,9 +1508,9 @@ def _gauge_scale(deq):
 def _agg(deq, width):
     n = len(deq)
     if n == 0:
-        return {"hist": [0] * 8, "hist_w": width, "n": 0, "mu": 0.0, "p95": 0.0}
+        return {"hist": [0] * HIST_BINS, "hist_w": width, "n": 0, "mu": 0.0, "p95": 0.0}
     vals = sorted(deq)
-    return {"hist": _hist_bins(deq, width, 8), "hist_w": width, "n": n,
+    return {"hist": _hist_bins(deq, width, HIST_BINS), "hist_w": width, "n": n,
             "mu": round(sum(vals) / n, 1),
             "p95": round(vals[min(n - 1, int(n * 0.95))], 1)}
 
@@ -1457,6 +1532,7 @@ def build_stats():
             pp_disp = 0.0
             if r.get("pp_raw", 0.0) > 0 and now - pp_at < 20000 and pp_at >= gen_at:
                 pp_disp = r["pp_raw"]
+            # 9 bins: TG 0..90+, PP 0..900+ tok/s, the top bin collects the tail.
             tg_s = _agg(s["tg"], 10) if s else _agg(deque(), 10)
             pp_s = _agg(s["pp"], 100) if s else _agg(deque(), 100)
             out.append({

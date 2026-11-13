@@ -12,19 +12,19 @@ line. Everything is computed server-side; the client only maps numbers to
 colored glyphs.
 
 ```
-Gigabyte 9070: [TG] ▕█████████▏ 46.9 t/s   (MTP 88.0%)  ▁▁▁▇█▂▁▁70+  n 500 μ 41  p95 50                                          [PP]                    0.0 t/s   ▅▃▇▇▅█▆▁700+  n 410 μ 385   p95 675
+Gigabyte 9070: [TG] ▕█████████▏ 46.9 t/s   (MTP 88.0%) ▁▁▁▇█▂▁▁▇90+  n 500 μ 41  p95 50                                          [PP]                    0.0 t/s  ▅▃▇▇▅█▆▁▁900+  n 410 μ 385   p95 675
 Gigabyte 9070: util 0%    63°C (67°C)  μC 59°C (73°C)  vram 70°C  15.2G/15.9G  17W  μW 127W  fan 62%
 
-Sapphire 9070: [TG] ▕·········▏ 0.0 t/s                 ▁▃█▄▁▁▁▁70+  n 500 μ 27  p95 38                                          [PP]                    0.0 t/s   ▃▂▁▁▁▄▆█700+  n 394 μ 591   p95 871
+Sapphire 9070: [TG] ▕·········▏ 0.0 t/s                ▁▃█▄▁▁▁▁▁90+  n 500 μ 27  p95 38                                          [PP]                    0.0 t/s  ▃▂▁▁▁▄▆█▁900+  n 394 μ 591   p95 871
 Sapphire 9070: util 100%  45°C (50°C)  μC 49°C (59°C)  vram 48°C  15.5G/15.9G  60W  μW 116W  fan 0%
 
 CPU  util 0%  61°C  RAM 40.1G/62.7G  30W                                                       up 2m 34s   (PP: 81s, req/think/gen: 25s/5s/20s, tool calls: 0s)   calls/failures 1/0   req 13
 ```
 
-- **[TG]** — token generation: live tok/s, MTP draft-acceptance %, a 70 tok/s
+- **[TG]** — token generation: live tok/s, MTP draft-acceptance %, a 90 tok/s
   histogram of the session, and n / mean / p95 aggregates.
 - **[PP]** — prompt processing: live t/s, prefill progress with ETA, a
-  700 t/s histogram, and n / mean / p95 aggregates.
+  900 t/s histogram, and n / mean / p95 aggregates.
 - **Hardware line** — util, chip temp (session max), session-mean chip/hotspot
   temps, VRAM temp, VRAM used/total, power, session-mean power, fan.
 - **System line** — CPU util, CPU temp, RAM used/total, CPU package power.

@@ -130,6 +130,10 @@ installing it, the following must already be in place on the server box:
      python serve/server.py --engine strata --config <model-config.json>
      ```
 
+Launch llama.cpp engines with `--metrics`: it serves the counters used for a
+live tok/s inside a running generation. Without it only per-request timings
+from the log stream are available.
+
 The engine command is declared inside llama-swap's `config.yaml` (the `cmd:`
 field per model). llama-metrics parses that config to learn which models exist
 and which engine serves each, then tails llama-swap's per-model

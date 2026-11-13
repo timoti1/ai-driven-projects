@@ -230,7 +230,8 @@ function speedText(tps: number, theme: any, colorFor: (tps: number, t: string) =
 function histBars(theme: any, agg: Agg, colorFor: (tps: number, text: string) => string): string {
   const dim = (s: string) => theme.fg("dim", s);
   const bins = agg.hist.length;
-  const right = `${(bins - 1) * agg.hist_w}+`;
+  // Label the last bin by its top edge: 9 bins x 10 = 90+, 9 x 100 = 900+.
+  const right = `${bins * agg.hist_w}+`;
   if (agg.n === 0) return dim(TRACK.repeat(bins) + right);
   const max = Math.max(...agg.hist);
   let out = "";
@@ -270,9 +271,9 @@ function buildSections(theme: any, gpuIdx: number): { tg: string; pp: string } {
   const mtpStr = (tg.display > 0 && st?.mtp_valid && st.mtp > 0)
     ? ` (${perfBand(theme, `MTP ${st.mtp.toFixed(1)}%`, st.mtp, 50, 75)})` : "";
   const tgMtp = padVisible(mtpStr, 13);
-  const tgHist = tg.hist.length ? histBars(theme, tg, tgColor) : dim(TRACK.repeat(8) + "70+");
+  const tgHist = tg.hist.length ? histBars(theme, tg, tgColor) : dim(TRACK.repeat(9) + "90+");
   const tgStats = statsFor(theme, tg, tgColor, [6, 6, 8]);
-  const tgSec = `${dim("[TG]")} ${gauge(tg.display, theme, tg.session_max)} ${tgSpeed} ${tgMtp} ${tgHist} ${tgStats}`;
+  const tgSec = `${dim("[TG]")} ${gauge(tg.display, theme, tg.session_max)} ${tgSpeed} ${tgMtp}${tgHist} ${tgStats}`;
 
   // PP section: progress slot fits "(99%, ETA 999 s)"; μ/p95 slots fit 5-digit cache-burst values.
   let prog = "";
@@ -283,9 +284,9 @@ function buildSections(theme: any, gpuIdx: number): { tg: string; pp: string } {
   }
   const ppProg = padVisible(prog, 18);
   const ppSpeed = padVisible(speedText(pp.display, theme, ppColor), 9);
-  const ppHist = pp.hist.length ? histBars(theme, pp, ppColor) : dim(TRACK.repeat(8) + "700+");
+  const ppHist = pp.hist.length ? histBars(theme, pp, ppColor) : dim(TRACK.repeat(9) + "900+");
   const ppStats = statsFor(theme, pp, ppColor, [6, 8, 10]);
-  const ppSec = `${dim("[PP]")} ${ppProg} ${ppSpeed} ${ppHist} ${ppStats}`;
+  const ppSec = `${dim("[PP]")} ${ppProg} ${ppSpeed}${ppHist} ${ppStats}`;
 
   return { tg: tgSec, pp: ppSec };
 }
