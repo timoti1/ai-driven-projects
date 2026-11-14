@@ -18,7 +18,7 @@ Gigabyte 9070: util 0%    63°C (67°C)  μC 59°C (73°C)  vram 70°C  15.2G/15
 Sapphire 9070: [TG] ▕·········▏ 0.0 t/s                ▁▃█▄▁▁▁▁▁90+  n 500 μ 27  p95 38                                          [PP]                    0.0 t/s  ▃▂▁▁▁▄▆█▁900+  n 394 μ 591   p95 871
 Sapphire 9070: util 100%  45°C (50°C)  μC 49°C (59°C)  vram 48°C  15.5G/15.9G  60W  μW 116W  fan 0%
 
-CPU  util 0%  61°C  RAM 40.1G/62.7G  30W                                                       up 2m 34s   (PP: 81s, req/think/gen: 25s/5s/20s, tool calls: 0s)   calls/failures 1/0   req 13
+CPU  util 0%  61°C  RAM 40.1G/62.7G  30W                                                       up 2m 34s TG: 1180  (PP: 81s, req/think/gen: 25s/5s/20s, tool calls: 0s)   calls/failures 1/0   req 13
 ```
 
 - **[TG]** — token generation: live tok/s, MTP draft-acceptance %, a 90 tok/s
@@ -30,6 +30,7 @@ CPU  util 0%  61°C  RAM 40.1G/62.7G  30W                                       
 - **System line** — CPU util, CPU temp, RAM used/total, CPU package power.
 - **Bottom session line** — per-prompt metrics shown on the same line as the system metrics, right-aligned:
   - `up` — elapsed time since the user prompt was submitted.
+  - `TG` — assistant message deltas (text + reasoning + tool-call tokens) streamed in this prompt.
   - `PP` — prompt processing time (prefill, from request start to first assistant token).
   - `req/think/gen` — total provider request generation time / model reasoning time / generation time (text + tool-call writing). `req` includes reasoning + text + tool-call tokens; `think` is reasoning (a subset of `req`); `gen` = `req` − `think`.
   - `tool calls` — cumulative time spent executing tool calls (actual tool execution, separate from `req`).

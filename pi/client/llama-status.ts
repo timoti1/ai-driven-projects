@@ -139,6 +139,7 @@ const state: {
     toolCalls: number;
     toolFailures: number;
     requests: number;
+    tokens: number;
     ppTime: number;
     reqTime: number;
     toolTime: number;
@@ -158,7 +159,7 @@ const state: {
   busy: false,
   session: {
     startedAt: null, endedAt: null, active: false,
-    toolCalls: 0, toolFailures: 0, requests: 0,
+    toolCalls: 0, toolFailures: 0, requests: 0, tokens: 0,
     ppTime: 0, reqTime: 0, toolTime: 0, thinkTime: 0,
     ppStartAt: null, reqStartAt: null, ppMeasured: false,
     lastDeltaType: null, lastDeltaTime: null,
@@ -276,8 +277,9 @@ function buildSections(theme: any, gpuIdx: number): { tg: string; pp: string } {
   const tgSec = `${dim("[TG]")} ${gauge(tg.display, theme, tg.session_max)} ${tgSpeed} ${tgMtp}${tgHist} ${tgStats}`;
 
   // PP section: progress slot fits "(99%, ETA 999 s)"; μ/p95 slots fit 5-digit cache-burst values.
+  // No PP speed sample exists until prefill ends, so progress must not depend on display.
   let prog = "";
-  if (pp.progress > 0 && pp.display > 0) {
+  if (pp.progress > 0 && (pp.progress < 1 || pp.display > 0)) {
     let inner = `${Math.round(pp.progress * 100)}%`;
     if (pp.eta_s != null) inner += `, ETA ${Math.round(pp.eta_s)} s`;
     prog = ` (${inner})`;
@@ -370,7 +372,7 @@ function buildSessionMeter(theme: any): string {
   // req = total generation window (reasoning + text + tool-call tokens).
   // think = reasoning time (directly measured, a subset of req).
   // gen = req - think = text + tool-call writing. tool = actual tool execution.
-  return `last prompt: ${dim("up")} ${up}  ${dim("(PP:")} ${pp}, ${dim("req/think/gen:")} ${req}/${think}/${gen}, ${dim("tool calls:")} ${tool})  ${dim("calls/failures")} ${se.toolCalls}/${se.toolFailures}  ${dim("req")} ${se.requests}`;
+  return `last prompt: ${dim("up")} ${up} ${dim("TG:")} ${se.tokens}  ${dim("(PP:")} ${pp}, ${dim("req/think/gen:")} ${req}/${think}/${gen}, ${dim("tool calls:")} ${tool})  ${dim("calls/failures")} ${se.toolCalls}/${se.toolFailures}  ${dim("req")} ${se.requests}`;
 }
 
 
@@ -503,7 +505,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("input", () => {
     state.session = {
       startedAt: Date.now(), endedAt: null, active: true,
-      toolCalls: 0, toolFailures: 0, requests: 0,
+      toolCalls: 0, toolFailures: 0, requests: 0, tokens: 0,
       ppTime: 0, reqTime: 0, toolTime: 0, thinkTime: 0,
       ppStartAt: null, reqStartAt: null, ppMeasured: false,
       lastDeltaType: null, lastDeltaTime: null,
@@ -546,6 +548,7 @@ export default function (pi: ExtensionAPI) {
     if (se.reqStartAt == null) {
       se.reqStartAt = now;
     }
+    se.tokens++;
     if (se.lastDeltaTime != null && isThinkingDelta(e.assistantMessageEvent?.type)) {
       se.thinkTime += now - se.lastDeltaTime;
     }
@@ -656,7 +659,7 @@ export default function (pi: ExtensionAPI) {
     timer = null;
     state.session = {
       startedAt: null, endedAt: null, active: false,
-      toolCalls: 0, toolFailures: 0, requests: 0,
+      toolCalls: 0, toolFailures: 0, requests: 0, tokens: 0,
       ppTime: 0, reqTime: 0, toolTime: 0, thinkTime: 0,
       ppStartAt: null, reqStartAt: null, ppMeasured: false,
       lastDeltaType: null, lastDeltaTime: null,
