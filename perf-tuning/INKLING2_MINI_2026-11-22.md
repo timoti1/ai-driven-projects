@@ -5,9 +5,9 @@ Investigated 2026-11-21/22 on the two-GPU host. Model pinned to the **Sapphire**
 workloads. Companion tooling: [`../perf-bench`](../perf-bench). Related:
 [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md), [MTP_TUNING_2026-11-03.md](MTP_TUNING_2026-11-03.md),
 [VULKAN_SAPPHIRE_2026-11-04.md](VULKAN_SAPPHIRE_2026-11-04.md),
-[QWEN38_27B_RDNA_BOOSTS_2026-11-22.md](QWEN38_27B_RDNA_BOOSTS_2026-11-22.md).
+[DENSE_27B_UNIFIED_2026-11-22.md](DENSE_27B_UNIFIED_2026-11-22.md).
 
-**TL;DR**
+## TL;DR
 
 - The model was **launch-latency bound, not bandwidth bound**: ~7 650 kernel launches per
   token (54–60 layer passes × 8-of-128 experts). Card reached 434 GB/s on a 7B control

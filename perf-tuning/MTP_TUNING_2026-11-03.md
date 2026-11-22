@@ -5,7 +5,7 @@ configuration is now live. Companion tooling lives in
 [`../perf-bench`](../perf-bench); the MoE-engine notes from October are in
 [STRATA_OPTIMIZATION.md](STRATA_OPTIMIZATION.md).
 
-**TL;DR**
+## TL;DR
 
 - **`--spec-draft-n-max 3` with no `--spec-draft-p-min` is the fastest drafter
   setting on both engines tested.** Raising to `n-max 4` **plus** `p-min 0.5`

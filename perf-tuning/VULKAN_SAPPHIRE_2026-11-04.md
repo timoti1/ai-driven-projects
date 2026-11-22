@@ -6,7 +6,7 @@ tooling: [`../perf-bench`](../perf-bench). Related:
 [BUILD_PROVENANCE.md](BUILD_PROVENANCE.md),
 [MTP_TUNING_2026-11-03.md](MTP_TUNING_2026-11-03.md).
 
-**TL;DR**
+## TL;DR
 
 - **The "KV spills to system RAM" theory is not the main cause** for the flagship
   170k / single-slot configuration: it fits in VRAM with 0.6–2.4 GiB to spare
