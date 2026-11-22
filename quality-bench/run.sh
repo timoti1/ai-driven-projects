@@ -6,6 +6,7 @@ set -euo pipefail
 
 MODEL="${1:?Usage: ./run.sh MODEL [RUN_ID] [NOTE] [SEED]}"   # bare model id or provider/id form; endpoint from env vars below (default: LM Studio)
 # OpenRouter example: BENCH_HOST=openrouter.ai BENCH_PORT=443 BENCH_SCHEME=https BENCH_PATH_PREFIX=/api BENCH_API_KEY_ENV=OPENROUTER_API_KEY BENCH_API=openai-completions ./run.sh nvidia/nemotron-3.5-super-vl:free
+# OpenCode Console example (personal API key, OpenAI-compatible): BENCH_HOST=opencode.ai BENCH_PORT=443 BENCH_SCHEME=https BENCH_PATH_PREFIX=/inference/openai BENCH_API_KEY_ENV=OPENCODE_API_KEY BENCH_API=openai-completions ./run.sh deepseek-v4.1-flash
 RUN_ID="${2:-$(date +%Y%m%d-%H%M%S)}"                 # timestamp by default so parallel campaigns never collide
 NOTE="${3:-}"                                          # free text -> meta_<RUN_NAME>.json (Note column of compare/report)
 SEED="${4-${BENCH_SEED:-1234}}"                       # generation seed -> samplingParams.seed (needs a server that honors seed); default 1234, pass "" to disable
