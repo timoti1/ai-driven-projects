@@ -154,6 +154,23 @@ That is the whole story: at ~15 % acceptance a 5-token window pays for itself on
 verify pass is nearly free — on a 24 GB card. Here every miss goes to host memory, so the
 drafter is a net loss and both configs now carry `--draft off`.
 
+## 5c. Thinking level, as shipped
+
+Inkling 2 Mini has a numeric thinking effort in its template
+(`none 0.0 · minimal 0.1 · low 0.2 · medium 0.7 · high 0.9 · xhigh 0.99`). Measured state of
+each model after today's work:
+
+| Model | Level when a request names none | Evidence |
+|---|---|---|
+| `inkling-2-mini-strata-sq10` / `-sq15` | **none (0.0) — forced** | Strata's terminal hard-codes it: `inkling_dialect.normalize_effort()` returns `"none"` for every value ("Inkling-2-Mini has no thinking mode"), `reasoning_chars = 0` |
+| `inkling-2-mini-maya-hip` | **minimal (0.1) — set today** | was unset, so the template default **0.9 ("high")** applied: a trivial question produced 402 chars of reasoning and ate a 220-token budget. `"reasoning_effort": "minimal"` in `ik2-solo.json`; the log now says *"thinking level when a request names none: none (the config says minimal)"* |
+| Qwen `qwen3.8-flash-IQ3_S/_XXS` (0.2.15) | template default (unset) | no `--reasoning-effort` in the pack configs; the llama.cpp Qwen profiles elsewhere use `--reasoning-effort low --reasoning-budget 4096` |
+
+The model card's advice (0.1) matches the video's; medium (0.7) "thinks for tens of thousands of
+tokens" and is the footgun. A client can always override per request with `reasoning_effort`
+(`none`…`high`), and Anthropic's `thinking.budget_tokens` is mapped to a level
+(< 2 k → low, < 8 k → medium, else high).
+
 ## 6. KV cache options, per engine
 
 | Engine | Options | Cost per token | Verdict |
