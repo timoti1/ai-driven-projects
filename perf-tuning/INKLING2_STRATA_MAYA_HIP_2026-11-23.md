@@ -193,3 +193,30 @@ llama-swap models added today (backups `config.yml.bak-*-2026-11-23`):
    single requests at ~64 k there.
 4. `strata-inkling --parallel` was never exercised: on SQ-10 there is VRAM for 2–4 slots, which
    would help an agent's parallel side calls.
+
+## 10. Appendix: what `SQ-10` / `SQ-15` / `SQ-20` are, in llama.cpp terms
+
+The pack name is **its size in GB, not a quantization scheme** ("The number in a pack's name is
+its approximate size in GB, not the card it needs", HF card). Inkling 2 Mini is 26.4 B
+parameters, so bits per weight fall out of the file sizes:
+
+| Deliverable | Size | bpw | Closest llama.cpp recipe | Their own quality vs the original |
+|---|---:|---:|---|---|
+| `UD-IQ2_XXS.gguf` (Unsloth) | 8.49 GB | 2.57 | IQ2_XXS | — |
+| `UD-Q2_K_XL.gguf` | 9.14 GB | 2.77 | Q2_K | — |
+| **`SQ-10.strata`** | **10.47 GB** | **3.17** | **IQ3_XXS–IQ3_S** | KLD 0.0502 · WT2 PPL 6.461 (+0.320) · top-1 **92.35 %** |
+| `UD-IQ3_XXS.gguf` | 11.66 GB | 3.53 | IQ3_S | — |
+| `UD-Q3_K_XL.gguf` | 13.63 GB | 4.13 | Q3_K_L | — |
+| **`SQ-15.strata`** | **14.35 GB** | **4.35** | **IQ4_XS / Q4_K_S** | KLD 0.00889 · PPL 6.177 (+0.036) · top-1 **96.68 %** |
+| `UD-Q4_K_XL.gguf` | 17.63 GB | 5.34 | Q4_K_M+ (dynamic, dense at Q8) | — |
+| **`SQ-20.strata`** | **19.35 GB** | **5.86** | Q5_K_M / Q6_K — but **lossless** | KLD 0.00000 · PPL 6.141 · top-1 **100 %** |
+
+The last row explains the oddity: SQ-20 is not "a 6-bit quant", it is **the original NVFP4
+checkpoint repacked**, so it is bit-exact (KLD 0.00000) — the weights were never re-quantized,
+which is why `strata-inkling` can run them "lossless direct GGUF_RAW".
+
+Consequence for the choice in §3: **SQ-10 buys its 37 tok/s at 62 k with 7.65 points of top-1
+agreement and +0.32 WikiText-2 perplexity**. If that matters for a task, `SQ-15` is a 4-bit
+class pack for ~1 % top-1 — the cost is only the depth collapse (15.3 tok/s at 62 k) and 3.6 GiB
+of VRAM. `UD-Q4_K_XL` (5.34 bpw) is between the two on size but is only usable through
+`maya-ik2` on this card.
