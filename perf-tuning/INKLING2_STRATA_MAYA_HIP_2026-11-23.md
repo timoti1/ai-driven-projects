@@ -10,13 +10,15 @@ Sapphire card and the two-card router), [STRATA_OPTIMIZATION.md](STRATA_OPTIMIZA
 
 ## TL;DR
 
-- **The fastest Inkling 2 Mini on this card is `strata-inkling` (Strata 0.2.20) with the
-  `SQ-10` pack**: **59.6 tok/s** decode / **2 476 tok/s** prefill at 1.5 k, and it is the
-  only configuration that does *not* collapse at depth — **37.0 tok/s at a 62 756-token
-  prompt**, where the 13.4 GiB `SQ-15` pack drops to 15.3 and `maya-ik2` to 32.9.
-- **`maya-ik2` does run on this AMD card — I ported it** (it ships CUDA-only). The port is
-  correct (its own FP64 kernel reference suite passes) but, at 16 GB, it loses to the
-  Strata pack build: 49 tok/s short, **32.9 tok/s at 62 k**, prefill 924 vs 2 124.
+- **`strata-inkling` (Strata 0.2.20) owns this card at every depth, on every metric.** With its
+  pack and `--draft off`: **SQ-15 = 70.4–73.5 tok/s** short, 64.8 after a 2 k prompt,
+  **39.7 tok/s at a 62 756-token prompt** (1 406 tok/s prefill); SQ-10 = 59.6–72, 36–37 at 62.7 k
+  with the best prefill on the box (2 476). `maya-ik2`, the CUDA engine ported to HIP below,
+  manages 49 / 32.9 / 924 — and has been removed from the host.
+- **`maya-ik2` did run on this AMD card — I ported it** (it ships CUDA-only), and the port is
+  correct (its own FP64 kernel reference suite passes). At 16 GB it loses to the Strata pack
+  build on every axis, so the entry, its config and its build were deleted at the end of the
+  session; the port notes are kept as §10.
 - **The GGUF is the slow path for `strata-inkling`.** With `UD-Q4_K_XL` the engine reports
   *"native lossless GGUF_RAW GPU kernels active for 512/3072 experts"* and manages 29.5 tok/s.
   The `.strata` packs are the intended format, and the pack size is what decides speed:
@@ -74,7 +76,8 @@ Two further findings:
   reference**; decode/multi-query attention (FP32/FP16/**FP8 KV**), routing, NVFP4 and Q8_0
   experts all pass on gfx1201. The `attn_flash` case is the one that cannot launch.
 
-Notes: `maya-inkling-mini/HIP-PORT-gfx1201.md`.
+The port notes are kept as a separate file after the engine was deleted:
+[MAYA_IK2_HIP_PORT_2026-11-23.md](MAYA_IK2_HIP_PORT_2026-11-23.md).
 
 ## 3. Inkling 2 Mini: the full matrix
 
@@ -87,8 +90,9 @@ makes the difference between the two columns, not the engine.
 |---|---|---:|---:|---:|
 | **`strata-inkling` + `SQ-10` pack, CLI** | — | **59.6 tok/s · 2 476 pp** | **29.2 · 1 758** | 18.4 · 1 387 |
 | **`strata-inkling` + `SQ-10` pack, server** | **120 k** | **47–48 · 2 124** | — | **37.0 · 1 341** |
-| `strata-inkling` + `SQ-15` pack, CLI | — | 56.5 · 2 071 | 21.3 · 1 439 | 14.5 · 1 054 |
-| `strata-inkling` + `SQ-15` pack, server | 120 k | 50.5 · 1 651 | — | 15.3 · 1 016 |
+| **`strata-inkling` + `SQ-15` pack, CLI, `--draft off`** | — | **65.2 · 2 687** | — | — |
+| **`strata-inkling` + `SQ-15` pack, server, `--draft off`** | **120 k** | **70.4–73.5 · 2 312** | — | **39.7 · 1 406** |
+| `strata-inkling` + `SQ-15`, same as above but with the drafter | 120 k | 50.5 · 1 651 | 21.3 · 1 439 | 15.3 · 1 016 |
 | `strata-inkling` + GGUF `UD-Q4_K_XL` (best of 5 placements) | — | 29.5 · 581 | — | — |
 | `maya-ik2` (HIP port) + GGUF, server | 131 k | 49.1 · 870–924 | — | 32.9 · 621 |
 | `maya-ik2` + GGUF, small context | 16 k | 49.5 · 710–952 | — | — |
@@ -190,16 +194,22 @@ prompt was clean — an instability of the HIP port to keep an eye on, not of th
 
 | Use case | Engine | Model / file | Why |
 |---|---|---|---|
-| **Inkling, short or medium prompts (≤ 32 k)** | **`strata-inkling` (Strata 0.2.20)** | **`Inkling-2-Mini-SQ-10.strata`** | best prefill on the box (2 124–2 476 tok/s) and 48–60 tok/s decode |
-| **Inkling, long context up to ~64 k** | **`strata-inkling` + `SQ-10`** | same | 37 tok/s at 62.7 k, 2.4× the SQ-15 pack |
-| Inkling, single request beyond 64 k | `maya-ik2` (HIP port) | `UD-Q4_K_XL.gguf`, 131 k | Strata cannot survive #6755 there; maya held 131 k at 32.9 tok/s |
-| Inkling, best quality per GiB | `strata-inkling` + `SQ-15` | 13.4 GiB pack | 50.5 tok/s short; only loses at depth because the KV leaves the card |
-| **Qwen3.8-Flash-Next, all traffic** | **Strata 0.2.15 (unchanged)** | IQ3_S / IQ3_XXS + MTP | 70.9 / 76.8 tok/s; 0.2.20 is 10 % behind until its profile is regenerated |
-| Agentic loops, tool calls | `maya-ik2` or `SQ-10` | — | maya keeps more speed under a growing conversation; SQ-10 wins if the prompt stays under ~32 k |
+| **Inkling, anything ≤ 32 k prompts** | **`strata-inkling` (0.2.20)** | **`SQ-15.strata`** (13.4 GiB, 4.35 bpw ≈ IQ4_XS) | **70.4–73.5 tok/s** decode, 2 312 prefill — the fastest and the best quality that runs here (top-1 96.7 %) |
+| **Inkling, long prompts (32–64 k)** | **`strata-inkling`** | **`SQ-15`**, or `SQ-10` if VRAM is tight | SQ-15 **39.7 tok/s** at 62.7 k with `--draft off`; SQ-10 37.0 with 3.6 GiB more headroom |
+| Inkling, maximum prefill | `strata-inkling` | `SQ-10` | 2 476 tok/s at 1.5 k — fastest prompt reading measured, at 3.17 bpw |
+| Inkling, best fidelity | `strata-inkling` | `SQ-20` | bit-exact (KLD 0.00000) but 18.0 GiB — **does not fit** this card |
+| Inkling, single request > 64 k | *nothing here* | — | Strata dies at ~71 k (upstream #6755); `maya-ik2` was the only one that held 131 k, and it is gone |
+| **Qwen3.8-Flash-Next, all traffic** | **Strata 0.2.15** | IQ3_S / IQ3_XXS + MTP | 70.9 / 93.8 tok/s; 0.2.20 is ~10 % behind until its profile is regenerated |
 
-Rule of thumb on this card: **nothing with 14.7 GiB of experts is fast unless it also fits the
-KV.** Every "slow" result in this document is the same failure — experts or KV crossing PCIe —
-and every "fast" result is the same success: the pack small enough that both stay resident.
+Rule of thumb on this card: **the pack size decides everything, and the drafter must be off.**
+SQ-10 vs SQ-15 is a trade of 3.6 GiB against ~8 points of top-1 agreement; with `--draft off`
+SQ-15 no longer collapses at depth, so it is the default and SQ-10 is the "give me VRAM back"
+option. Everything that was slow in this document was experts or KV crossing PCIe.
+
+`maya-ik2` (the HIP port, §2/§10) is retired: 49 tok/s short, 32.9 at 62.7 k, prefill 924, and
+one SIGSEGV observed under a longer thinking trace. Removed from llama-swap and deleted from
+`/media/timoti/Data/repos/maya-inkling-mini`; the 17.6 GB `UD-Q4_K_XL.gguf` (its only consumer,
+5.34 bpw, the highest-fidelity file on the box) was left on disk in case it is wanted again.
 
 ## 8. Reproduce
 
@@ -231,14 +241,16 @@ llama-swap models added today (backups `config.yml.bak-*-2026-11-23`):
 
 ## 9. Open items
 
-1. **RDNA4 WMMA for maya-ik2** — the one lever left for it (prefill 924 → ~2 000, deep decode
-   up); needs the fragment plumbing fixed and the FP64 kernel test as the gate.
+1. **Upstream #6755** — Strata 0.2.20 dies around 71 k tokens in one request (it took this host
+   down once); until fixed, cap single requests at ~64 k. With maya-ik2 gone there is no engine
+   on this machine for a single 100 k+ request.
 2. **Regenerate the Qwen expert profile with 0.2.20 tooling** — the only thing standing between
    Qwen and the new engine.
-3. **Upstream #6755** — Strata 0.2.20 dies around 71 k tokens in one request; until fixed, cap
-   single requests at ~64 k there.
-4. `strata-inkling --parallel` was never exercised: on SQ-10 there is VRAM for 2–4 slots, which
+3. `strata-inkling --parallel` was never exercised: on SQ-10 there is VRAM for 2–4 slots, which
    would help an agent's parallel side calls.
+4. Re-measure the SQ packs at 1.5 k / 32 k / 64 k **once upstream fixes the drafter's cost** —
+   the whole depth story changed the moment `--draft off` was applied, so the shipped defaults
+   are worth re-checking after each release.
 
 ## 10. Appendix: what `SQ-10` / `SQ-15` / `SQ-20` are, in llama.cpp terms
 
