@@ -154,22 +154,29 @@ That is the whole story: at ~15 % acceptance a 5-token window pays for itself on
 verify pass is nearly free — on a 24 GB card. Here every miss goes to host memory, so the
 drafter is a net loss and both configs now carry `--draft off`.
 
-## 5c. Thinking level, as shipped
+## 5c. Thinking level: 0.5 everywhere (low-to-middle)
 
-Inkling 2 Mini has a numeric thinking effort in its template
-(`none 0.0 · minimal 0.1 · low 0.2 · medium 0.7 · high 0.9 · xhigh 0.99`). Measured state of
-each model after today's work:
+Inkling 2 Mini's template carries the model card's own scale —
+`none 0.0 · minimal 0.1 · low 0.2 · medium 0.7 · high 0.9 · xhigh/max 0.99` — and writes it into
+the prompt as `Thinking effort level: N`. **Both engines now run at 0.5** when a request names
+nothing, which is neither the 0.7 ("medium") that the video warns about nor the 0.0 that Strata
+forced:
 
-| Model | Level when a request names none | Evidence |
-|---|---|---|
-| `inkling-2-mini-strata-sq10` / `-sq15` | **none (0.0) — forced** | Strata's terminal hard-codes it: `inkling_dialect.normalize_effort()` returns `"none"` for every value ("Inkling-2-Mini has no thinking mode"), `reasoning_chars = 0` |
-| `inkling-2-mini-maya-hip` | **minimal (0.1) — set today** | was unset, so the template default **0.9 ("high")** applied: a trivial question produced 402 chars of reasoning and ate a 220-token budget. `"reasoning_effort": "minimal"` in `ik2-solo.json`; the log now says *"thinking level when a request names none: none (the config says minimal)"* |
-| Qwen `qwen3.8-flash-IQ3_S/_XXS` (0.2.15) | template default (unset) | no `--reasoning-effort` in the pack configs; the llama.cpp Qwen profiles elsewhere use `--reasoning-effort low --reasoning-budget 4096` |
+| Model | Before | Now | How |
+|---|---|---|---|
+| `inkling-2-mini-strata-sq10` / `-sq15` | **forced 0.0** — `inkling_dialect.normalize_effort()` returned `"none"` for every value ("Inkling-2-Mini has no thinking mode") | **0.5** | patch to `terminal/serve/inkling_dialect.py`: `DEFAULT_EFFORT = 0.5`, numeric pass-through in `normalize_effort`/`template_kwargs` (backup `.bak-050`) |
+| `inkling-2-mini-maya-hip` | **0.9** — no config value, so the template default applied | **0.5** | `"reasoning_effort": 0.5` in `ik2-solo.json` **plus** three patches: `frontend.config_effort` (a number is accepted, it refused "not a number"), `frontend.effort_kwargs` (passes it through), and the Inkling branch of `ChatTemplate.render` (dropped anything not in `INKLING_EFFORT`, so a float silently became 0.9) |
 
-The model card's advice (0.1) matches the video's; medium (0.7) "thinks for tens of thousands of
-tokens" and is the footgun. A client can always override per request with `reasoning_effort`
-(`none`…`high`), and Anthropic's `thinking.budget_tokens` is mapped to a level
+Verified by rendering the prompt directly: `Thinking effort level: 0.5` on both. A client can
+still override per request — `reasoning_effort: "none" | "minimal" | "low" | "medium" | "high"`
+or a number `0.0–0.99`; Anthropic's `thinking.budget_tokens` is mapped to a level
 (< 2 k → low, < 8 k → medium, else high).
+
+Observed effect: at 0.9 maya spent 402 characters reasoning about a trivial counting question;
+at 0.5 the same class of question answers directly, and a three-step arithmetic prompt produced
+557 characters of reasoning plus a 275-character answer at **49.1 tok/s** (375 tokens, 10 s).
+One run crashed the maya port (`exit code -11`) right after the patch, and the retry on the same
+prompt was clean — an instability of the HIP port to keep an eye on, not of the Strata engine.
 
 ## 6. KV cache options, per engine
 
