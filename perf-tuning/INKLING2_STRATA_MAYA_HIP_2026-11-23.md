@@ -21,9 +21,11 @@ Sapphire card and the two-card router), [STRATA_OPTIMIZATION.md](STRATA_OPTIMIZA
   *"native lossless GGUF_RAW GPU kernels active for 512/3072 experts"* and manages 29.5 tok/s.
   The `.strata` packs are the intended format, and the pack size is what decides speed:
   **SQ-10 (9.75 GiB) > SQ-15 (13.4 GiB) > SQ-20 (needs 24 GiB)**.
-- **The DSpark drafter is worthless on this card in every engine**: 56.5 → 56.3 tok/s on
-  Strata, 48.7 → 47.1–49.2 on maya-ik2, and forcing it (`IK2_DRAFT_ADAPT=0`) changes
-  nothing. With ~78 % of the experts resident, a verify window never pays.
+- **The DSpark drafter costs speed on this card, in every engine, and is now disabled**: on
+  Strata, `--draft off` gives **+9 % decode on SQ-10 (60.1 → 65.7) and +15 % decode / +29 %
+  prefill on SQ-15 (56.8 → 65.2, 2 080 → 2 687)**; through llama-swap it is 70.4–73.5 tok/s
+  against 50.5 with the drafter. On maya-ik2 it is 48.7 → 47.1–49.2 and forcing it
+  (`IK2_DRAFT_ADAPT=0`) changes nothing. Acceptance on SQ packs is only ~13–22 %.
 - **Two GPUs are slower than one**, even with all 14.7 GiB of experts cached:
   **29.8–33.1 tok/s** against 49 on a single card — the chipset x2 slot costs more than the
   misses it removes.
@@ -122,7 +124,7 @@ production and 0.2.20 runs only as the `-v0220` twins.
 
 | Idea | Result |
 |---|---|
-| DSpark drafter on 16 GB | 56.5 → 56.3 (Strata), 48.7 → 47.1–49.2 (maya-ik2), forced `IK2_DRAFT_ADAPT=0` identical; `timings.draft_n = 0` — the controller declines, and it is right |
+| DSpark drafter on 16 GB | Strata, CLI 1.5 k prompt: SQ-10 60.1 → **65.7** and SQ-15 56.8 → **65.2** tok/s with `--draft off`, SQ-15 prefill 2 080 → **2 687**; through llama-swap SQ-15 goes 50.5 → 70.4–73.5 tok/s. maya-ik2: 48.7 → 47.1–49.2, `IK2_DRAFT_ADAPT=0` identical, `timings.draft_n = 0`. Both configs now ship `--draft off` |
 | Two cards, layer split, all experts cached | 29.8–33.1 tok/s against 49 on one card |
 | GGUF instead of a `.strata` pack | 29.5 vs 59.6 tok/s; GGUF never selects native kernels beyond 512/3072 experts (upstream #6729 is the same family of bug) |
 | `--kv k8v4` / `k8v8` (4-bit / int8 KV) on HIP | upstream #6681: allocates more VRAM than fp16, OOMs earlier; `--kv fp8` only |
@@ -131,6 +133,26 @@ production and 0.2.20 runs only as the `-v0220` twins.
 | 100 k-token single request on Strata 0.2.20 | hit upstream #6755 (`kv grow` fatal) — this is what took the host down mid-session; stay ≤ ~64 k per request |
 | UnbiasedStrata as a drop-in for Qwen | slower than 0.2.15 on both axes |
 | Borrowing the RDNA4 WMMA path from Avalon/ggml for maya-ik2 | lead confirmed (`__builtin_amdgcn_wmma_f32_16x16x16_f16_w32_gfx12` takes the `mma.sync` fragment structs directly, `ggml-cuda/mma.cuh:1370`); my first integration compiled and ran but produced wrong values against the reference, so it was reverted — open item |
+
+## 5b. The drafter, and why it is off
+
+Both `strata-inkling` and `maya-ik2` speculate with **DSpark**, Thinking Machines' own drafter
+(ships with the checkpoint; embedded in every `.strata` pack — the Strata server appends
+`--draft dspark` by itself, an external one can be named with `--dspark mtp.safetensors`).
+Its state is 2 sliding-window-1025 KV rings + 1 global KV + an f_rnn ring; it drafts **up to 7
+tokens per step** (`0..max_draft, typically up to 7`) and one verify pass emits 1 to 8, and
+Strata only speculates while exactly one request is active and its prefill is done.
+
+Measured acceptance on this card (serve `timings`, 200–300-token generations):
+
+| Pack | drafted / accepted per request | acceptance | HF's own "AR alpha" |
+|---|---|---:|---:|
+| SQ-10 | 90/13, 94/17, 43/6, 40/4 | **13–18 %** | 2.701 |
+| SQ-15 | 221/34, 99/14, 64/14, 62/9 | **13–22 %** | 2.583 |
+
+That is the whole story: at ~15 % acceptance a 5-token window pays for itself only when the
+verify pass is nearly free — on a 24 GB card. Here every miss goes to host memory, so the
+drafter is a net loss and both configs now carry `--draft off`.
 
 ## 6. KV cache options, per engine
 
