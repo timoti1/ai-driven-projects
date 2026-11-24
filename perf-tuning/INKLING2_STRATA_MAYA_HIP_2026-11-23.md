@@ -38,6 +38,10 @@ Sapphire card and the two-card router), [STRATA_OPTIMIZATION.md](STRATA_OPTIMIZA
   PolyStrata 0.1.45-poly.1 vintage (prefill 723–848 vs 1 191–1 234 for 0.2.15), its Inkling
   engine on Linux is CPU + Metal only, and its `src/ik2` is the same CUDA source that needed
   porting in the first place.
+- **On quality the picture is different from speed (§11)**: with the same harness Hy4-Flash SQ-64
+  on two cards and thinking high scores **93.6 %**, Inkling SQ-15 **80.2 %**, SQ-10 **72.7 %** —
+  Hy4 wins 9 of 10 benches, Inkling wins only on prefill (2 300 vs 290 tok/s) and short-prompt
+  decode (70 vs 40 tok/s).
 - **KV cache**: `fp8` (8-bit E4M3) is the right choice everywhere; 16 KB/token in maya-ik2,
   and `k8v4`/`k8v8` are unusable on HIP (upstream #6681: they allocate *more* than fp16 and
   OOM earlier). There is no 4-bit KV in maya-ik2 at all.
@@ -278,3 +282,83 @@ agreement and +0.32 WikiText-2 perplexity**. If that matters for a task, `SQ-15`
 class pack for ~1 % top-1 — the cost is only the depth collapse (15.3 tok/s at 62 k) and 3.6 GiB
 of VRAM. `UD-Q4_K_XL` (5.34 bpw) is between the two on size but is only usable through
 `maya-ik2` on this card.
+
+## 11. Quality: the benchmark suite (2026-11-23/24)
+
+The same harness as always (`../quality-bench`): ten benches, one fresh Docker container per
+bench, driven by a `pi` agent that must call tools (`_show_batch.py`, `_append_batch.py`,
+`solutions.py`, `out.txt`) and is scored afterwards by `score.py`. Every model below ran the
+identical prompts, 200 MMLU / 100 GSM8K / 200 ARC / 200 HellaSwag / 100 MATH / 200 WinoGrande /
+100 BBH / 30 HumanEval / 50 Terminal / 50 TerminalHard = 1230 scored items.
+
+| Bench | **Hy4-Flash SQ-64** (220B-A12B, 2 GPUs, thinking high) | **Inkling SQ-15** (4.35 bpw) | **Inkling SQ-10** (3.17 bpw) |
+|---|---:|---:|---:|
+| MMLU | **182/200 = 91.0 %** | 162/200 = 81.0 % | 157/200 = 78.5 % |
+| GSM8K | **97/100 = 97.0 %** | 58/100 = 58.0 % | 36/100 = 36.0 % |
+| HellaSwag | **185/200 = 92.5 %** | 175/200 = 87.5 % | 167/200 = 83.5 % |
+| ARC-Challenge | **198/200 = 99.0 %** | 191/200 = 95.5 % | 185/200 = 92.5 % |
+| MATH | **68/100 = 68.0 %** | 39/100 = 39.0 % | 9/100 = 9.0 % |
+| WinoGrande | **192/200 = 96.0 %** | 167/200 = 83.5 % | 152/200 = 76.0 % |
+| BBH | **100/100 = 100 %** | 69/100 = 69.0 % | 100/100 = 100 % |
+| HumanEval | 29/30 = 96.7 % | 29/30 = 96.7 % | 0/30 = 0 % |
+| Terminal (agent) | **50/50 = 100 %** | 48/50 = 96.0 % | 39/50 = 78.0 % |
+| TerminalHard (agent) | **50/50 = 100 %** | 49/50 = 98.0 % | 49/50 = 98.0 % |
+| **OVERALL** | **1151/1230 = 93.6 %** | **987/1230 = 80.2 %** | **894/1230 = 72.7 %** |
+| Wall clock for the run | 4 h 05 min | 1 h 00 min | 55 min |
+
+### The same workload as a speed test
+
+The suite is a real agentic load (4–28 K-token prompts, tool calls, long answers), so the
+engine's own counters give a better picture than any idle benchmark:
+
+| Configuration | prefill | decode | experts in VRAM | host RAM |
+|---|---:|---:|---:|---:|
+| Hy4-Flash SQ-64, **1 GPU**, thinking none | 245 tok/s | 15.6 tok/s | 8.9 GB | 52.9 GB |
+| **Hy4-Flash SQ-64, 2 GPUs (layer split), thinking none** | **290 tok/s** | **40.6 tok/s** | **22 GiB** | 36.8 GB |
+| Hy4-Flash SQ-64, 2 GPUs, **thinking high** (the scored run) | 290 tok/s | ~33 tok/s | 22 GiB | 36.8 GB |
+| Inkling SQ-15, 1 GPU, no drafter | 2 312 tok/s | 70 tok/s (1 K prompt) · 39.7 (62.7 K) | 13.4 GiB pack | — |
+
+Prompt-cache reuse over the Hy4 runs: 79 % of prompt tokens served from the conversation cache,
+which is what keeps a 290 tok/s prefill from dominating the wall clock.
+
+### What the numbers say
+
+- **Hy4-Flash wins on quality, and by a distance**: +13.4 points over the best Inkling pack, and
+  it wins 9 of 10 benches (HumanEval is a tie at 96.7 %). A 220B-A12B model at SQ-64 is simply in
+  another class than a 26B model at 4.35 bpw.
+- **Where Inkling still wins is start-up speed**: 2 300 tok/s prefill vs 290, and 70 tok/s decode
+  on short prompts. For a chat turn or a small edit, Inkling SQ-15 feels faster; for anything that
+  scores quality, Hy4 wins outright.
+- **The two-card layer split was the biggest win of the session**: decode 15.6 → 40.6 tok/s
+  (+160 %) and prefill 245 → 290, entirely because 22 GiB of experts moved into VRAM (both cards
+  at 14.4/15.9 GB) instead of being computed by the CPU. The chipset x2 link costs nothing —
+  activations crossing it are 6 KB per token. Filling the last gigabyte per card does not help
+  (probes at 20/22/24 GiB: 29.2 / 29.0 / 28.2 tok/s).
+- **Thinking level matters more than quantisation level**: Inkling SQ-10 (3.17 bpw, thinking off)
+  scored 72.7 %, SQ-15 (4.35 bpw, thinking off) 80.2 %, Hy4 SQ-64 with thinking high 93.6 %.
+  MATH is the clearest case: 9 % → 39 % → 68 %.
+- **An earlier Inkling SQ-10 run scored 40.1 %** and is *not* comparable: the model was being
+  reloaded under it during the measurements (MMLU died after two tool calls, HumanEval never
+  created `solutions.py`). It is kept here as the example of why runs must not be disturbed.
+
+### Harness fixes without which these numbers are meaningless
+
+Found while diagnosing that 40.1 % run, all committed to `../quality-bench`:
+
+| Fix | Effect |
+|---|---|
+| `INSTRUCTIONS.md`: "a failing command is never a reason to stop; every turn while `_todo.py` reports remaining > 0 must end with a tool call" | HumanEval 0/30 → **29/30**, GSM8K 60/100 → 100/100 answered |
+| `Dockerfile`: `python3-sympy numpy scipy` (plus a `.dockerignore`, since `docker build .` was shipping `runs/` as context) | MATH became answerable at all: 0 → 9 % (SQ-10) / 39 % (SQ-15) |
+| `run.sh`: automatic relaunch of an incomplete bench (`BENCH_RETRIES`, default 2) with a "continue from where you stopped" prompt | Terminal 0/50 → **50/50** on the retry, MATH 50/100 → retried instead of silently scoring half |
+| `bin/_progress.py`: idle kill 15 min → 8 min | a stalled container no longer eats 15 minutes per bench |
+| `bin/_model_file.py`: resolves `.strata` packs, not just `.gguf` | reports show the pack, e.g. `Hy4-Flash-SQ-64` |
+
+### Configurations these numbers were produced with
+
+- **Hy4-Flash SQ-64**: `strata-hy4` 0.1.66 (built from Strata 0.2.20, HIP gfx1201),
+  `--gpus 1,0 --layer-split auto`, `--vram-experts-gb 22`, `--max-context 81920`, `--kv q8`,
+  DFly2 speculation on (K=7, adaptive tree), `reasoning_effort high` + 8 192-token budget,
+  Engram-Q8 shard streamed from the SSD.
+- **Inkling SQ-15 / SQ-10**: `strata-inkling` 0.1.66, `--max-context 131072`/`120000`, `--kv fp8`,
+  `--cpu-threads 8`, `--draft off`, `reasoning_effort none` (the scored runs predate the 0.2
+  default).
