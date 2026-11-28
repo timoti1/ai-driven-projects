@@ -6,7 +6,10 @@ render/
 logs/
 frames/
 
-# per-episode files the pipeline generates from edit/topics.json + style.json
+# edit/ is a working copy: `make init` fills it from config/*.example.json, and
+# the pipeline generates the rest.  Nothing in it is an artifact of the project.
+edit/style.json
+edit/topics.json
 edit/cuts.json
 edit/topics_edited.json
 edit/panel_gates.json
