@@ -1,0 +1,22 @@
+# Python dependencies.  Install into a venv (see README, "Установка"):
+#     python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#
+# ffmpeg and tesseract are system packages, not pip:
+#     sudo apt-get install ffmpeg tesseract-ocr tesseract-ocr-rus
+# ffmpeg must be built with VAAPI for GPU encoding (`ffmpeg -hide_banner
+# -encoders | grep vaapi`); otherwise set encoder=libx264 in edit/style.json and
+# expect roughly 2.5x slower.
+
+yt-dlp>=2025.1            # download of the source video + captions
+numpy>=1.26               # every measurement: silence, motion, alpha, contrast
+pillow>=10                # the dashboard plate (make_plate.py) and text width
+fonttools>=4.40           # reads fonts/*.ttf so text width is measured, not guessed
+pymorphy3>=2.0            # lemmatiser for audit_titles.py (topic names vs speech)
+pymorphy3-dicts-ru>=2.4   # Russian dictionary for the above
+
+# Only needed when the source has no captions at all (scripts/transcribe.py).
+# It pulls ctranslate2 + tokenizers (~500 MB) and downloads model weights to
+# ~/.cache/huggingface on first run, so it is optional and deliberately not in
+# the base install:
+#
+# faster-whisper>=1.1

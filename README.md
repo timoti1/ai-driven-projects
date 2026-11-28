@@ -14,6 +14,7 @@ isolation. `master` holds all folders merged together.
 | `perf-tuning` | Inference tuning notes (Vulkan vs HIP, VRAM budget, build provenance) |
 | `voice-slm-selection` | Text SLM selection for the voice assistant (Qwen3.5-4B, quants, KV cache) |
 | `voice-assistant-selection` | Speech stack + assistant host selection (parakeet STT, terminal use) |
+| `video-editing` | Transcript-driven lecture editing pipeline (silence cuts, on-screen topic panel, numeric verification) |
 
 ## Layout convention
 

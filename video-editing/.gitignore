@@ -1,0 +1,31 @@
+# Working folders of an episode: media and derived output never belong in git.
+# `make dirs init` recreates them; config/*.example.json is the starting point.
+source/
+work/
+render/
+logs/
+frames/
+
+# per-episode files the pipeline generates from edit/topics.json + style.json
+edit/cuts.json
+edit/topics_edited.json
+edit/panel_gates.json
+edit/stats.json
+edit/verified.json
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# anything media-shaped, wherever it appears
+*.mp4
+*.mkv
+*.webm
+*.wav
+*.m4a
+*.vtt
+*.srt
+*.jpg
+*.jpeg
+*.png

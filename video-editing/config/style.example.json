@@ -1,0 +1,142 @@
+{
+  "_comment": [
+    "House style for LearnToCode lecture edits.",
+    "render.py reads this file; every key is optional and falls back to the",
+    "built-in default, so a new video can override only what it needs.",
+    "Colours are 0xRRGGBB. Geometry is in 1920x1080 pixels."
+  ],
+  "canvas": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 25
+  },
+  "palette": {
+    "accent": "0x39c6ff",
+    "accent_done": "0x7ee787",
+    "track": "0x23272f",
+    "panel_bg": "0x10141b",
+    "panel_alpha": "0.80",
+    "card_bg": "0x0b0f16",
+    "text_primary": "white",
+    "text_secondary": "0xdfe6ee",
+    "text_muted": "0x8b97a7",
+    "text_card_body": "0xcfd8e3",
+    "text_card_meta": "0x9fb0c3",
+    "plate_bg": "0x14191f",
+    "text_upcoming": "0x8a95a2",
+    "text_done": "0xe8eef5",
+    "min_upcoming_contrast": 1.35,
+    "_row_states": "upcoming 0x8a95a2 (recessive) < done 0xe8eef5 < current white+bold; a row lights up and gets a tick when it finishes -- the panel is read top-down as the lecture moves through it"
+  },
+  "fonts": {
+    "_comment": [
+      "Manrope (SIL Open Font License 1.1), vendored in fonts/ --",
+      "geometric grotesque, complete Cyrillic, tabular numerals.  A relative path is",
+      "resolved from the project root by render._font(), so a clone finds its own",
+      "fonts/; absolute system paths still work and a missing font stops the run with a",
+      "named key instead of failing inside the encode.  DejaVu Sans is used only for the",
+      "tick glyph (U+2713), which Manrope lacks: it comes from ttf-dejavu-core, or point",
+      "fonts.tick at any font that has U+2713."
+    ],
+    "bold": "fonts/Manrope-Semibold.ttf",
+    "regular": "fonts/Manrope-Medium.ttf",
+    "tick": "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+  },
+  "dashboard": {
+    "layout": "right_column",
+    "panel_x": 1600,
+    "panel_w": 320,
+    "panel_y": 77,
+    "panel_h": 896,
+    "plate_png": "render/panel_plate.png",
+    "plate_radius": 22.0,
+    "plate_alpha": 0.66,
+    "plate_border_alpha": 0.5,
+    "plate_border_w": 2.0,
+    "rail_inset": 4.0,
+    "clock_fontsize": 26,
+    "header_fontsize": 13,
+    "list_header": "ТЕМЫ ВЫПУСКА",
+    "list_y": 167,
+    "row_h": 34,
+    "row_fontsize": 15,
+    "row_bar_h": 3,
+    "tick_fontsize": 17,
+    "progress_steps": 8,
+    "global_steps": 40,
+    "global_bar_w": 4,
+    "_placement_rule": "topics in one column down the right edge, not a mosaic along the bottom. Paint's canvas stops short of the screen edge, so x>=1600 below the ribbon is empty grey margin; the plate top sits at y=62, which does reach into the title-bar band -- panel_gates.py measures what the plate actually covers and the gates hide the plate wherever content is drawn there. Rows stop 16 px short of the plate's rounded bottom corner; row height grows to fill the plate when there are few topics (capped at row_h_max).",
+    "text_border_w": 2,
+    "text_border_color": "0x000000@0.60",
+    "text_box": false,
+    "text_box_color": "0x000000@0.42",
+    "text_box_borderw": 8,
+    "visible_ink_share": 0.015,
+    "gate_pad_source": 1.0,
+    "gate_merge_source": 4.0,
+    "gate_min_visible_source": 6.0,
+    "gate_min_hidden_source": 2.0,
+    "clock_total_fontsize": 18,
+    "clock_gap": 12,
+    "tick_glyph": "✓",
+    "marker_dot": 7,
+    "row_h_max": 44,
+    "row_bottom_clear": 16
+  },
+  "cards": {
+    "intro_dur": 7.0,
+    "outro_dur": 10.0,
+    "lesson_fontsize": 42,
+    "title_fontsize": 52,
+    "title_max_width": 1680,
+    "meta_fontsize": 30,
+    "outro_heading": "Что разобрали в этом выпуске",
+    "outro_heading_fontsize": 44,
+    "outro_next": "Продолжение следует",
+    "recap_fontsize": 26,
+    "recap_x": 150,
+    "recap_y0": 300,
+    "_recap_note": "the outro card lists the topics marked recap:true in edit/topics.json -- selection is content, it lives with the topic, not here",
+    "recap_line_mult": 1.45
+  },
+  "transitions": {
+    "content_fade_in": 0.5,
+    "content_fade_out": 1.2,
+    "intro_fade_in": 0.8,
+    "intro_fade_out": 0.9,
+    "outro_fade_in": 0.6,
+    "outro_fade_out": 1.6
+  },
+  "audio": {
+    "highpass": 70,
+    "denoise_nr": 11,
+    "denoise_nf": -32,
+    "dynaudnorm_f": 250,
+    "dynaudnorm_g": 13,
+    "dynaudnorm_p": 0.45,
+    "dynaudnorm_m": 2,
+    "limiter": 0.95,
+    "bitrate": "160k",
+    "sample_rate": 48000
+  },
+  "encode": {
+    "vaapi_device": "/dev/dri/renderD128",
+    "codec": "h264_vaapi",
+    "global_quality": 20,
+    "gop": 50,
+    "extra_hw_frames": 16
+  },
+  "delivery": {
+    "_comment": [
+      "Parameters for the size-limited copy (e-mail, Telegram).",
+      "Applied by hand; render.py always renders the master at encode/."
+    ],
+    "codec": "libx264",
+    "crf": 28,
+    "preset": "slow",
+    "pix_fmt": "yuv420p",
+    "audio_codec": "aac",
+    "audio_kbps": 128,
+    "faststart": true
+  }
+}
